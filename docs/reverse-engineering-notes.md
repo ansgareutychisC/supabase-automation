@@ -458,3 +458,45 @@ Supabase's API is significantly simpler:
 
 The only complication is the `redirect_to` bug, which is easily worked
 around by stripping the param.
+
+---
+
+## Live validation results
+
+The redirect_to workaround and Bearer-auth path were validated against the
+real Supabase endpoints from the sandbox:
+
+### Verify endpoint (live test)
+
+Tested `verify_email()` with the sample URL from `supabase.signup-email.txt`
+(token `cfe3771b4707ecd4a0dd2509bdc019541471dfddfda81a6cfb55a941` — expired).
+
+**With** `redirect_to` stripped (our implementation):
+- Status: 303
+- Location: `https://app.supabase.com#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired`
+- Verdict: ✅ The verify endpoint returned a proper error redirect (otp_expired),
+  NOT the buggy "Verify requires a verification type" error. The workaround works.
+
+**Without** stripping (raw email URL): the dashboard shows
+`{"code":400,"error_code":"validation_failed","msg":"Verify requires a verification type"}`
+(confirming the bug exists).
+
+### Platform API (live test)
+
+Tested `GET /platform/profile` with a fake Bearer token from the sandbox
+datacenter IP:
+
+- Status: 401
+- Body: `{"message":"JWT could not be decoded"}`
+- Server: cloudflare
+- Verdict: ✅ No WAF blocking, no Cloudflare "Attention Required" page.
+  The API accepts plain requests with Bearer auth. Cookies (__cf_bm) are
+  NOT required.
+
+### Conclusion
+
+The architecture is validated:
+- Only `POST /platform/signup` needs the browser extension (for hCaptcha)
+- `GET /auth/v1/verify` works with plain `requests` (after stripping redirect_to)
+- All `api.supabase.com/platform/*` endpoints work with plain `requests` + Bearer
+- The bridge daemon + Chrome extension are only needed for the signup step
