@@ -239,10 +239,21 @@ def _format_logs(logs: list) -> str:
 # ---------------------------------------------------------------------- #
 
 async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
-    """WS /ws - WebSocket endpoint for the Chrome extension."""
+    """WS /ws - WebSocket endpoint for the Chrome extension.
+
+    Heartbeat: aiohttp sends a WebSocket Ping every 15s and expects a Pong
+    within 10s. If no Pong arrives, the connection is closed and the
+    extension's auto-reconnect kicks in. This catches dead connections
+    that would otherwise hang indefinitely (e.g. when the MV3 service
+    worker dies without sending a close frame).
+    """
     global WS_CONN
 
-    ws = web.WebSocketResponse(max_msg_size=50 * 1024 * 1024)
+    ws = web.WebSocketResponse(
+        max_msg_size=50 * 1024 * 1024,
+        heartbeat=15.0,   # send Ping every 15s, expect Pong within 10s
+        autoping=True,
+    )
     await ws.prepare(request)
 
     add_log("info", "WebSocket connection from extension")
@@ -288,6 +299,8 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                     add_log(level, f"[ext] {message}", log_data)
 
                 elif msg_type == "pong":
+                    # Keepalive response from extension (legacy — aiohttp's
+                    # autoping now handles this at the WS protocol level)
                     pass  # keepalive
 
                 else:
@@ -362,6 +375,103 @@ async def handle_api_command(request: web.Request) -> web.Response:
         return web.json_response(result)
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+# ---------------------------------------------------------------------- #
+# HTTP fallback (SOS satellite mode) — extension polls for commands
+# and POSTs results back. Used when WebSocket can't stay alive (e.g.
+# MV3 service worker dies, or network blocks WS).
+# ---------------------------------------------------------------------- #
+
+# Queue of pending commands for the HTTP-polling extension
+HTTP_COMMAND_QUEUE: list[dict] = []  # list of {id, cmd, created_at}
+HTTP_RESULTS: dict[str, dict] = {}    # {command_id: result}
+
+
+async def handle_api_poll(request: web.Request) -> web.Response:
+    """GET /api/poll?agentId=X&wait=30 — long-poll for pending commands.
+
+    The extension calls this in a loop. If there are pending commands,
+    returns them immediately. Otherwise holds the connection open for up
+    to `wait` seconds (long polling) and returns when a command arrives.
+
+    Returns: {"commands": [{"id": "...", "type": "...", ...}]}
+    """
+    agent_id = request.query.get("agentId", "unknown")
+    wait_sec = min(float(request.query.get("wait", "30")), 60)  # cap at 60s
+
+    deadline = time.time() + wait_sec
+    while time.time() < deadline:
+        # Pop any pending commands
+        if HTTP_COMMAND_QUEUE:
+            cmds = []
+            while HTTP_COMMAND_QUEUE:
+                cmds.append(HTTP_COMMAND_QUEUE.pop(0))
+            # Also include any results the extension hasn't acked yet
+            return web.json_response({"commands": cmds, "server_time": time.time()})
+        await asyncio.sleep(0.5)
+
+    # No commands arrived within the wait window
+    return web.json_response({"commands": [], "server_time": time.time()})
+
+
+async def handle_api_result_post(request: web.Request) -> web.Response:
+    """POST /api/result - extension posts a command result.
+
+    Body: {"id": "<command_id>", "ok": true/false, ...result fields}
+    Stores the result so the Python client can retrieve it.
+    """
+    try:
+        result = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+    cmd_id = result.get("id")
+    if not cmd_id:
+        return web.json_response({"ok": False, "error": "Missing 'id'"}, status=400)
+    HTTP_RESULTS[cmd_id] = result
+    # Also resolve any pending WebSocket future for this command (in case
+    # the client sent via WS but the extension responded via HTTP)
+    if cmd_id in PENDING:
+        fut = PENDING.pop(cmd_id)
+        if not fut.done():
+            fut.set_result(result)
+        STATE["commands_completed"] += 1
+    return web.json_response({"ok": True})
+
+
+async def handle_api_result_get(request: web.Request) -> web.Response:
+    """GET /api/result/:id - client retrieves a result (HTTP polling mode).
+
+    Returns 404 if the result isn't ready yet (client should retry).
+    """
+    cmd_id = request.match_info["cmd_id"]
+    if cmd_id in HTTP_RESULTS:
+        result = HTTP_RESULTS.pop(cmd_id)
+        return web.json_response(result)
+    return web.json_response({"ok": False, "error": "Result not ready"}, status=404)
+
+
+async def handle_api_send_http(request: web.Request) -> web.Response:
+    """POST /api/send-http - client sends a command via HTTP (not WebSocket).
+
+    Queues the command for the HTTP-polling extension. Returns the command
+    ID immediately. Client then polls GET /api/result/:id for the result.
+
+    Body: {"type": "fetch"|"tabs.open"|..., ...command fields}
+    Returns: {"ok": true, "id": "<command_id>"}
+    """
+    try:
+        cmd = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+    cmd_id = str(uuid.uuid4())
+    cmd["id"] = cmd_id
+    cmd["_queued_at"] = time.time()
+    HTTP_COMMAND_QUEUE.append(cmd)
+    STATE["commands_received"] += 1
+    STATE["last_command_at"] = time.time()
+    add_log("info", f"→ (HTTP) {cmd.get('type')} (id={cmd_id[:8]})")
+    return web.json_response({"ok": True, "id": cmd_id})
 
 
 async def handle_api_open(request: web.Request) -> web.Response:
@@ -511,6 +621,12 @@ async def run(host: str, port: int) -> None:
     app.router.add_post("/api/cookies", handle_api_cookies)
     app.router.add_post("/api/fetch", handle_api_fetch)
     app.router.add_post("/api/captcha-token", handle_api_captcha_token)
+
+    # HTTP fallback (SOS satellite mode) — extension polls for commands
+    app.router.add_get("/api/poll", handle_api_poll)
+    app.router.add_post("/api/result", handle_api_result_post)
+    app.router.add_get("/api/result/{cmd_id}", handle_api_result_get)
+    app.router.add_post("/api/send-http", handle_api_send_http)
 
     runner = web.AppRunner(app)
     await runner.setup()

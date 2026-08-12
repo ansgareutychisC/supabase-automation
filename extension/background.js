@@ -171,6 +171,9 @@ async function connect(rawUrl) {
     state.lastError = null;
     log('info', 'ws-connected', { url });
 
+    // Stop HTTP fallback polling — WS is alive now
+    stopHttpPolling();
+
     // Send auth + connect messages
     ws.send(JSON.stringify({ type: 'auth', token: state.authToken || '' }));
     ws.send(JSON.stringify({
@@ -222,7 +225,11 @@ async function connect(rawUrl) {
     log('info', 'disconnected', { code: event.code, reason: event.reason });
     broadcastStatus();
 
-    // Auto-reconnect after 5s
+    // Start HTTP fallback polling immediately (SOS satellite mode)
+    // This keeps the extension functional even if WS reconnection fails
+    startHttpPolling();
+
+    // Auto-reconnect WebSocket after 5s
     if (event.code !== 1000 && state.serverUrl) {
       log('info', 'auto-reconnect-in-5s');
       setTimeout(async () => {
@@ -252,16 +259,43 @@ function disconnect() {
 }
 
 // ---------------------------------------------------------------------------
-// Send result back to server
+// Send result back to server (via WebSocket or HTTP fallback)
 // ---------------------------------------------------------------------------
 
 function sendResult(id, result) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const msg = { type: 'result', id, ...result };
-  ws.send(JSON.stringify(msg));
-  state.commandsCompleted++;
-  log('debug', 'result-sent', { id, ok: result.ok, ...('status' in result ? { status: result.status } : {}) });
+  // Try WebSocket first
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(msg));
+    state.commandsCompleted++;
+    log('debug', 'result-sent-ws', { id, ok: result.ok });
+  } else {
+    // HTTP fallback: POST /api/result
+    sendResultHttp(msg);
+  }
   broadcastStatus();
+}
+
+async function sendResultHttp(msg) {
+  try {
+    const cfg = await loadConfig();
+    const httpUrl = cfg.serverUrl
+      .replace(/^ws/, 'http')
+      .replace(/\/ws$/, '') + '/api/result';
+    const r = await fetch(httpUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(msg),
+    });
+    if (r.ok) {
+      state.commandsCompleted++;
+      log('debug', 'result-sent-http', { id: msg.id });
+    } else {
+      log('error', 'result-http-failed', { id: msg.id, status: r.status });
+    }
+  } catch (e) {
+    log('error', 'result-http-error', { id: msg.id, error: e.message });
+  }
 }
 
 function sendError(id, error) {
@@ -269,6 +303,58 @@ function sendError(id, error) {
   log('error', 'command-failed', { id, error });
   sendResult(id, { ok: false, error: String(error) });
   broadcastStatus();
+}
+
+// ---------------------------------------------------------------------------
+// HTTP fallback polling (SOS satellite mode)
+// When WebSocket can't stay alive (MV3 service worker died, network blocks WS),
+// the extension falls back to long-polling GET /api/poll for commands.
+// ---------------------------------------------------------------------------
+
+let httpPollActive = false;
+
+async function startHttpPolling() {
+  if (httpPollActive) return;
+  httpPollActive = true;
+  log('info', 'http-poll-start');
+
+  while (httpPollActive) {
+    try {
+      const cfg = await loadConfig();
+      if (!cfg.serverUrl) break;
+      const httpUrl = cfg.serverUrl
+        .replace(/^ws/, 'http')
+        .replace(/\/ws$/, '') + '/api/poll?agentId=' + state.agentId + '&wait=25';
+
+      const r = await fetch(httpUrl, { method: 'GET' });
+      if (r.ok) {
+        const data = await r.json();
+        const commands = data.commands || [];
+        for (const cmd of commands) {
+          // Update connection status — we're alive via HTTP
+          if (state.status !== 'connected') {
+            state.status = 'connected-http';
+            state.connectedAt = Date.now();
+            broadcastStatus();
+          }
+          log('info', 'http-cmd-received', { type: cmd.type, id: cmd.id });
+          state.commandsReceived++;
+          broadcastStatus();
+          await handleCommand(cmd);
+        }
+      }
+    } catch (e) {
+      log('warn', 'http-poll-error', { error: e.message });
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
+  httpPollActive = false;
+  log('info', 'http-poll-stop');
+}
+
+function stopHttpPolling() {
+  httpPollActive = false;
 }
 
 // ---------------------------------------------------------------------------

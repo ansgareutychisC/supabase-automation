@@ -96,12 +96,14 @@ class ExtensionBridge:
         scheme: str = "http",
         auth_token: str = "",
         timeout: float = 30.0,
+        use_http_fallback: bool = False,
     ):
         self.host = host
         self.port = port
         self.scheme = scheme
         self.auth_token = auth_token
         self.timeout = timeout
+        self.use_http_fallback = use_http_fallback
         self._base_url = f"{scheme}://{host}:{port}"
         self._session: aiohttp.ClientSession | None = None
 
@@ -109,10 +111,16 @@ class ExtensionBridge:
     # Lifecycle
     # ------------------------------------------------------------------ #
     async def connect(self) -> None:
-        """Open the HTTP session to the bridge daemon."""
+        """Open the HTTP session to the bridge daemon.
+
+        Uses a generous total timeout (5 min) so long-running commands
+        (like XHR intercepts waiting for the user to solve a captcha)
+        don't kill the session. Individual commands still have their
+        own timeout passed via the `timeout` parameter.
+        """
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=self.timeout + 10),
+                timeout=aiohttp.ClientTimeout(total=300.0),  # 5 min total
             )
         # Check the daemon is alive
         async with self._session.get(f"{self._base_url}/health") as r:
@@ -122,6 +130,10 @@ class ExtensionBridge:
                 )
             data = await r.json()
             log.info("Bridge daemon connected: %s", data)
+            if data.get("extension_connected"):
+                log.info("Extension is connected via WebSocket")
+            elif self.use_http_fallback:
+                log.info("Extension NOT connected via WebSocket; will use HTTP fallback")
 
     async def close(self) -> None:
         if self._session and not self._session.closed:
@@ -168,29 +180,80 @@ class ExtensionBridge:
     # Command sending (via the daemon's /api/command endpoint)
     # ------------------------------------------------------------------ #
     async def _send_command(self, cmd: dict, timeout: float | None = None) -> CommandResult:
-        """Send a command to the extension via the daemon. Returns the result."""
+        """Send a command to the extension via the daemon. Returns the result.
+
+        Primary path: WebSocket (POST /api/command).
+        Fallback path: HTTP queue (POST /api/send-http + poll GET /api/result/:id).
+        """
         if not self._session:
             await self.connect()
         assert self._session is not None
+
+        # Check if we should use HTTP fallback
+        if self.use_http_fallback or not await self.is_extension_connected():
+            return await self._send_command_http(cmd, timeout or self.timeout)
+
         payload = dict(cmd)
         payload["timeout"] = timeout or self.timeout
-        async with self._session.post(
-            f"{self._base_url}/api/command",
-            json=payload,
-        ) as r:
-            if r.status == 503:
-                raise ConnectionError(
-                    "Extension is not connected to the bridge daemon. "
-                    "Load the extension and click Connect."
-                )
-            if r.status != 200:
-                text = await r.text()
-                raise RuntimeError(f"Daemon returned {r.status}: {text[:200]}")
-            result = await r.json()
+        try:
+            async with self._session.post(
+                f"{self._base_url}/api/command",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=(timeout or self.timeout) + 5),
+            ) as r:
+                if r.status == 503:
+                    # Extension not connected via WS — try HTTP fallback
+                    log.info("Extension not connected via WS; trying HTTP fallback")
+                    return await self._send_command_http(cmd, timeout or self.timeout)
+                if r.status != 200:
+                    text = await r.text()
+                    raise RuntimeError(f"Daemon returned {r.status}: {text[:200]}")
+                result = await r.json()
+        except asyncio.TimeoutError:
+            # WS command timed out — the extension may have died. Try HTTP.
+            log.warning("WS command timed out; trying HTTP fallback")
+            return await self._send_command_http(cmd, timeout or self.timeout)
         ok = result.get("ok", False)
         if not ok:
             return CommandResult(ok=False, error=result.get("error", "Unknown error"), data=result)
         return CommandResult(ok=True, data=result)
+
+    async def _send_command_http(self, cmd: dict, timeout: float = 30.0) -> CommandResult:
+        """Send a command via the HTTP queue (SOS satellite mode).
+
+        1. POST /api/send-http → queues the command, returns command ID
+        2. Poll GET /api/result/:id every 1s until result arrives or timeout
+        """
+        assert self._session is not None
+        async with self._session.post(
+            f"{self._base_url}/api/send-http",
+            json=cmd,
+        ) as r:
+            if r.status != 200:
+                text = await r.text()
+                return CommandResult(ok=False, error=f"send-http failed: {text[:200]}")
+            data = await r.json()
+        cmd_id = data.get("id")
+        if not cmd_id:
+            return CommandResult(ok=False, error="No command ID returned from send-http")
+
+        # Poll for the result
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                async with self._session.get(
+                    f"{self._base_url}/api/result/{cmd_id}",
+                ) as r:
+                    if r.status == 200:
+                        result = await r.json()
+                        ok = result.get("ok", False)
+                        if not ok:
+                            return CommandResult(ok=False, error=result.get("error", "Unknown"), data=result)
+                        return CommandResult(ok=True, data=result)
+            except Exception:
+                pass
+            await asyncio.sleep(1.0)
+        return CommandResult(ok=False, error=f"HTTP fallback timed out after {timeout}s")
 
     # ------------------------------------------------------------------ #
     # High-level command methods (mirror the notion bridge API)

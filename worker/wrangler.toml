@@ -1,0 +1,42 @@
+# Cloudflare Worker — Supabase Onboarding Fleet Manager
+#
+# Architecture: Hono app + BridgeHub Durable Object (extension WebSocket) + D1
+#
+# Deploy with:
+#   CLOUDFLARE_API_TOKEN=<token> npx wrangler deploy
+#
+# Set secrets:
+#   echo "<email-worker-bearer>" | npx wrangler secret put EMAIL_WORKER_TOKEN
+#   echo "<bridge-auth-token>"   | npx wrangler secret put BRIDGE_TOKEN
+#
+# D1 database:
+#   npx wrangler d1 create supabase-onboarding
+#   npx wrangler d1 execute supabase-onboarding --file=migrations/0001_init.sql
+
+name = "supabase-onboarding-worker"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+[observability]
+enabled = true
+
+# D1 database for account state, jobs, organizations
+[[d1_databases]]
+binding = "DB"
+database_name = "supabase-onboarding"
+database_id = "REPLACE_WITH_D1_ID"
+
+# Durable Object: BridgeHub — manages extension WebSocket connections + command proxy
+[[durable_objects.bindings]]
+name = "BRIDGE_HUB"
+class_name = "BridgeHub"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["BridgeHub"]
+
+# Non-secret defaults (secrets set via wrangler secret put)
+[vars]
+EMAIL_WORKER_URL = "https://mail-api.privatimail.com"
+EMAIL_DOMAIN = "privatimail.com"

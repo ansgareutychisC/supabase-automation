@@ -40,3 +40,5 @@ har/
 
 # Generated
 download/
+worker/node_modules/
+.wrangler/
