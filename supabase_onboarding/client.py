@@ -119,10 +119,7 @@ class SupabasePlatformClient:
         if r.status_code == 404:
             # 404 is a valid response for some endpoints (e.g. profile before
             # it's been created). Return None instead of raising.
-            try:
-                return r.json()
-            except Exception:
-                return None
+            return None
         if not (200 <= r.status_code < 300):
             try:
                 err = r.json()
@@ -165,21 +162,29 @@ class SupabasePlatformClient:
     # Auth helpers
     # ------------------------------------------------------------------ #
     def is_token_valid(self) -> bool:
-        """Quick check: does GET /platform/profile return 200 or 401/404?
+        """Quick check: is the token valid?
 
-        200 or 404 -> token is valid (404 means profile not yet created)
-        401/403    -> token is invalid/expired
+        For JWT: GET /platform/profile returns 200 or 404 (both = valid)
+        For PAT: GET /v1/organizations returns 200 (PATs don't work on /platform/*)
         """
-        try:
-            self.get("/platform/profile")
-            return True
-        except SupabaseAuthError:
-            return False
-        except SupabaseAPIError as e:
-            # 404 is OK - means token is valid but profile doesn't exist yet
-            if e.status_code == 404:
+        if self.token_kind == "pat":
+            # PATs only work on /v1/* (public Management API)
+            try:
+                self.get("/v1/organizations")
                 return True
-            raise
+            except (SupabaseAuthError, SupabaseAPIError):
+                return False
+        else:
+            # JWTs work on /platform/*
+            try:
+                self.get("/platform/profile")
+                return True
+            except SupabaseAuthError:
+                return False
+            except SupabaseAPIError as e:
+                if e.status_code == 404:
+                    return True
+                raise
 
     @property
     def token_kind(self) -> str:

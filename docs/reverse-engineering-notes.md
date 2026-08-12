@@ -573,3 +573,50 @@ The key difference: Supabase uses standard hCaptcha (not enterprise),
 which means captcha-solving services are a viable path for full automation.
 For Notion, even solved tokens are rejected for signup due to enterprise
 mode. This is a significant advantage for Supabase automation.
+
+---
+
+## E2E live test results (full signup → PAT)
+
+Successfully ran the complete onboarding flow end-to-end on
+2026-08-12. All steps worked:
+
+| Step | Result | Notes |
+|------|--------|-------|
+| 1. Fill signup form via extension | ✅ | Used `#email` and `#password` selectors (NOT `input[type=email]` — Supabase uses `type="text"` for the email field) |
+| 2. Click Sign Up button | ✅ | Button enabled after fill (React state updated via extension's `form.fill` which uses native setter + input events) |
+| 3. hCaptcha challenge | ✅ | User solved the "click the animal that doesn't match" challenge (2 pages). ~6s for email to arrive after solve. |
+| 4. Poll email worker for verify link | ✅ | Email received in 6s. Link extracted from `text_body` via regex. |
+| 5. Follow verify link (strip redirect_to) | ✅ | 303 redirect with `#access_token=<JWT>&refresh_token=...` parsed from Location header. |
+| 6. GET /auth/v1/user | ✅ | Confirmed session works, got user_id. |
+| 7. POST /platform/profile | ✅ | Created profile id=16358060. |
+| 8. POST /platform/organizations | ✅ | Created org slug=`axhyfsqmtomaeqnscmpk`. |
+| 9. POST /platform/profile/access-tokens | ✅ | Generated PAT `sbp_***REDACTED***`. |
+| 10. Verify PAT against /v1/* | ✅ | `GET /v1/organizations` returned the org. PAT works! |
+
+### Important: JWT vs PAT auth split
+
+Discovered during E2E testing: **the PAT does NOT work against `/platform/*` endpoints** — it returns `{"message":"JWT could not be decoded"}`. This is because `/platform/*` is the dashboard API and only accepts JWTs.
+
+The auth split is:
+- **JWT** (from `GET /auth/v1/verify`, 30-min expiry) → `/platform/*` dashboard API (profile, org, PAT creation)
+- **PAT** (`sbp_...`, long-lived) → `/v1/*` public Management API (projects, databases, functions, etc.)
+
+This matches the Notion project's pattern (cookie session for app API, `ntn_*` PAT for public REST API).
+
+The `SupabasePlatformClient.is_token_valid()` method now checks the token kind and uses the appropriate endpoint:
+- For JWT: `GET /platform/profile` (200 or 404 = valid)
+- For PAT: `GET /v1/organizations` (200 = valid)
+
+### Bug found + fixed
+
+`client.py:request()` was returning the 404 error body (a JSON dict like `{"message":"User's profile not found"}`) instead of `None` for 404 responses. This caused `get_profile()` to try parsing the error dict as a profile, resulting in `id=0`. Fixed by returning `None` for all 404s (the caller checks for `None` and calls `create_profile()` if needed).
+
+### Timing
+
+- Form fill + click: ~2s
+- hCaptcha solve (user): ~6s
+- Email arrival: ~6s after captcha solve
+- Verify + get_user: ~1s
+- Profile + org + PAT creation: ~2s
+- **Total: ~17s end-to-end** (excluding human captcha solve time)
