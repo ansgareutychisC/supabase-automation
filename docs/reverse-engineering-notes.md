@@ -500,3 +500,76 @@ The architecture is validated:
 - `GET /auth/v1/verify` works with plain `requests` (after stripping redirect_to)
 - All `api.supabase.com/platform/*` endpoints work with plain `requests` + Bearer
 - The bridge daemon + Chrome extension are only needed for the signup step
+
+---
+
+## hCaptcha behavior — live test with agent-browser
+
+Tested the signup page (`https://supabase.com/dashboard/sign-up`) with
+`agent-browser` (headless Chrome 151) to determine whether hCaptcha
+auto-passes or shows a visual challenge.
+
+### Test sequence
+
+1. **Page load**: hCaptcha loaded in **invisible/passive mode**. Two iframes:
+   - `frame=checkbox-i` — `display: none` (checkbox hidden)
+   - `frame=challenge&` — `display: block` but positioned off-screen
+     (`top: -9999`) — pre-rendered but not visible
+   - `hcaptcha.getResponse()` returns empty (no token yet)
+   - Sign Up button is **enabled** (form is valid)
+
+2. **Filled email + password**: no change in hCaptcha state. Button
+   remains enabled.
+
+3. **Clicked Sign Up**: hCaptcha challenge iframe moved from `top: -9999`
+   to `top: -2` (visible on screen). The challenge shown:
+   - Heading: **"Click the animal that does not match"**
+   - Subtitle: "page 1 of 2" (multi-page challenge)
+   - Buttons: Skip Challenge, Select language, Accessibility, Refresh, hCaptcha logo
+   - Form fields (email, password, Sign Up) all became **disabled**
+
+   See `docs/screenshots/02-hcaptcha-visual-challenge.png`.
+
+### Verdict
+
+**hCaptcha does NOT auto-pass for Supabase signup.** A visual challenge
+is shown after clicking Sign Up. The challenge requires human interaction
+(click the animal that doesn't match, across 2 pages).
+
+### Configuration details
+
+- **Enterprise mode**: NO (`enterpriseMode: false`)
+- **Accessibility cookie**: not set (would allow bypass for visually
+  impaired users — not applicable for automation)
+- **Sitekey**: loaded dynamically from hCaptcha's JS (not in page HTML)
+- **Challenge type**: image classification ("click the animal that does
+  not match") — standard hCaptcha, NOT enterprise
+
+### Implications for automation
+
+1. **Headless browser alone is NOT sufficient** — the visual challenge
+   requires human interaction.
+2. **The browser extension approach is the right one** — the user solves
+   the challenge once in a real browser tab, the extension captures the
+   token, and the rest of the flow is automated.
+3. **A captcha-solving service would work** — since it's NOT enterprise
+   mode, standard services (2captcha, anti-captcha) should be able to
+   solve it. This would enable fully-automated signup. Future enhancement.
+4. **The challenge is multi-page** (page 1 of 2) — the user may need to
+   solve 2 challenges in sequence. The extension's polling approach
+   (every 2 seconds for up to 5 minutes) handles this.
+
+### Comparison with Notion
+
+| Aspect | Notion | Supabase |
+|--------|--------|----------|
+| hCaptcha enterprise mode | YES (rejects headless tokens for signup) | NO |
+| Visual challenge shown | Yes | Yes |
+| Challenge type | Various | "Click the animal that does not match" |
+| Multi-page | Sometimes | Yes (2 pages) |
+| Captcha-solving service viable | No (enterprise rejects solved tokens) | **Yes** (standard mode) |
+
+The key difference: Supabase uses standard hCaptcha (not enterprise),
+which means captcha-solving services are a viable path for full automation.
+For Notion, even solved tokens are rejected for signup due to enterprise
+mode. This is a significant advantage for Supabase automation.
