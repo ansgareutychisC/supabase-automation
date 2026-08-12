@@ -811,7 +811,7 @@ async function handleCookiesSet(cmd) {
       url,
       name: c.name,
       value: c.value,
-      domain: c.domain || '.notion.com',
+      domain: c.domain || '.supabase.com',
       path: c.path || '/',
       secure: c.secure !== false,
       httpOnly: c.httpOnly || false,
@@ -897,7 +897,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // (DecompressionStream doesn't support zstd in Chrome 151 service worker).
 // The page's main world fetch() handles zstd natively via Chrome's network stack.
 //
-// Requires a Notion tab to be open (the fetch runs in that tab's context).
+// Requires a Supabase tab to be open (the fetch runs in that tab's context).
 // Uses chrome.scripting with world: 'MAIN' to execute in the page's main world.
 // ---------------------------------------------------------------------------
 

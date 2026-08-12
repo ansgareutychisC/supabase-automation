@@ -27,7 +27,7 @@ let refreshInterval = null;
 
 (async () => {
   const cfg = await chrome.storage.local.get(['serverUrl', 'autoConnect']);
-  serverUrlInput.value = cfg.serverUrl || 'wss://preview-chat-672657de-8fc2-47b1-8770-916464a90553.space-z.ai/ws';
+  serverUrlInput.value = cfg.serverUrl || 'ws://localhost:8787/ws';
   autoConnectCheckbox.checked = cfg.autoConnect !== false;
   refreshStatus();
   // Start polling for status updates

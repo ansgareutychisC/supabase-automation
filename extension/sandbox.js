@@ -1,5 +1,5 @@
 /**
- * Notion Bridge Sandbox — Page Context (zstd-native)
+ * Supabase Bridge Sandbox — Page Context (zstd-native)
  *
  * Connects to the bridge via WebSocket. The sandbox page runs in a full
  * Chrome page context where Chrome's network stack handles zstd natively.

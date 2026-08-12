@@ -166,7 +166,7 @@
   <div class="section">
     <h2>Server Connection</h2>
     <div class="input-group">
-      <input type="text" id="serverUrl" placeholder="wss://preview-chat-672657de-8fc2-47b1-8770-916464a90553.space-z.ai/ws" />
+      <input type="text" id="serverUrl" placeholder="ws://localhost:8787/ws (local) or wss://preview-<bot-id>.space-z.ai/ws?XTransformPort=8787 (remote)" />
       <button id="connectBtn">Connect</button>
     </div>
     <div class="checkbox-group">
@@ -206,7 +206,7 @@
     <div class="instructions">
       <strong>1.</strong> Run the Python backend: <code>python automate.py signup-ext --email you@privatimail.com --password 'StrongPass123!'</code><br>
       <strong>2.</strong> Click <strong>Connect</strong> above (the Python server must be running first).<br>
-      <strong>3.</strong> The extension will open the Notion signup page automatically.<br>
+      <strong>3.</strong> The extension will open the Supabase signup page automatically.<br>
       <strong>4.</strong> Solve the hCaptcha when prompted — the extension captures the token.<br>
       <strong>5.</strong> The Python backend completes the rest (email code, login, onboarding).
     </div>
