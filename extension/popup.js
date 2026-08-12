@@ -27,7 +27,7 @@ let refreshInterval = null;
 
 (async () => {
   const cfg = await chrome.storage.local.get(['serverUrl', 'autoConnect']);
-  serverUrlInput.value = cfg.serverUrl || 'ws://localhost:8787/ws';
+  serverUrlInput.value = cfg.serverUrl || 'wss://supabase-onboarding-worker.21cc20ac.workers.dev/ws';
   autoConnectCheckbox.checked = cfg.autoConnect !== false;
   refreshStatus();
   // Start polling for status updates
