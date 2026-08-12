@@ -54,9 +54,16 @@ app.get('/health', (c) => c.json({ ok: true, service: 'supabase-onboarding-worke
 // --- Token bootstrap (for extension) ---
 app.get('/api/token', (c) => c.json({ token: c.env.BRIDGE_TOKEN || '' }));
 
+// Helper: get the BridgeHub DO stub (singleton instance named "default")
+function getHub(c: any): DurableObjectStub {
+    const ns = c.env.BRIDGE_HUB as DurableObjectNamespace;
+    const id = ns.idFromName('default');
+    return ns.get(id);
+}
+
 // --- Extension status ---
 app.get('/api/extensions', async (c) => {
-    const hub = c.env.BRIDGE_HUB as any /* DurableObjectNamespace */;
+    const hub = getHub(c);
     const res = await hub.fetch(new Request('https://do/status'));
     return res;
 });
@@ -149,7 +156,7 @@ app.post('/api/accounts/:id/relogin', async (c) => {
     const account = await db.prepare('SELECT email FROM accounts WHERE email = ? OR user_id = ?').bind(id, id).first() as any;
     if (!account) return c.json({ error: 'Not found' }, 404);
 
-    const hub = c.env.BRIDGE_HUB as any /* DurableObjectNamespace */;
+    const hub = getHub(c);
     const supa = new SupabaseAutomation(hub as any, c.env);
 
     try {
@@ -179,7 +186,7 @@ app.post('/api/run', async (c) => {
     const patExpiresInDays = body.patExpiresInDays || 30;
 
     const db = c.env.DB as D1Database;
-    const hub = c.env.BRIDGE_HUB as any /* DurableObjectNamespace */;
+    const hub = getHub(c);
     const supa = new SupabaseAutomation(hub as any, c.env);
 
     const jobId = crypto.randomUUID();
@@ -287,7 +294,7 @@ app.get('/', (c) => {
 
 // --- WebSocket upgrade for extension + dashboard ---
 app.get('/ws', async (c) => {
-    const hub = c.env.BRIDGE_HUB as any /* DurableObjectNamespace */;
+    const hub = getHub(c);
     // Forward the WebSocket upgrade to the Durable Object
     const upgradeHeaders = new Headers(c.req.raw.headers);
     if (c.env.BRIDGE_TOKEN) {
@@ -301,7 +308,7 @@ app.get('/ws', async (c) => {
 });
 
 app.get('/ws/dashboard', async (c) => {
-    const hub = c.env.BRIDGE_HUB as any /* DurableObjectNamespace */;
+    const hub = getHub(c);
     const res = await hub.fetch(new Request('https://do/ws/dashboard', {
         method: 'GET',
         headers: c.req.raw.headers,

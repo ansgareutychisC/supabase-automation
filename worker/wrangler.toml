@@ -25,7 +25,7 @@ enabled = true
 [[d1_databases]]
 binding = "DB"
 database_name = "supabase-onboarding"
-database_id = "REPLACE_WITH_D1_ID"
+database_id = "ea6b57cf-47a6-4876-88bc-1b61f5943906"
 
 # Durable Object: BridgeHub — manages extension WebSocket connections + command proxy
 [[durable_objects.bindings]]
@@ -34,7 +34,7 @@ class_name = "BridgeHub"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["BridgeHub"]
+new_sqlite_classes = ["BridgeHub"]
 
 # Non-secret defaults (secrets set via wrangler secret put)
 [vars]
