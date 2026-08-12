@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Notion Bridge Sandbox</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 20px; }
+h1 { font-size: 16px; color: #3ECF8E; margin-bottom: 12px; }
+.status { padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; }
+.status.connected { background: #1b4332; color: #52b788; }
+.status.disconnected { background: #4a1e1e; color: #e76f51; }
+.stats { display: flex; gap: 12px; margin-bottom: 12px; }
+.stat { background: #16213e; padding: 8px 14px; border-radius: 6px; font-size: 12px; }
+.stat-label { color: #888; font-size: 10px; text-transform: uppercase; }
+.stat-value { font-size: 18px; font-weight: 600; }
+.log { background: #0f0f23; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 11px; max-height: 300px; overflow-y: auto; line-height: 1.5; }
+.log-entry { color: #aaa; }
+.log-entry.info { color: #64b5f6; }
+.log-entry.warn { color: #ffb74d; }
+.log-entry.error { color: #ef5350; }
+.log-entry.success { color: #66bb6a; }
+</style>
+</head>
+<body>
+<h1>🔒 Notion Bridge Sandbox — Page Context (zstd-native)</h1>
+<div class="status disconnected" id="status">Disconnected</div>
+<div class="stats">
+  <div class="stat"><div class="stat-label">Fetched</div><div class="stat-value" id="fetched">0</div></div>
+  <div class="stat"><div class="stat-label">Total bytes</div><div class="stat-value" id="bytes">0</div></div>
+  <div class="stat"><div class="stat-label">Errors</div><div class="stat-value" id="errors">0</div></div>
+</div>
+<div class="log" id="log"></div>
+<script src="sandbox.js"></script>
+</body>
+</html>

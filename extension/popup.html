@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Supabase Onboarding Bridge</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      width: 420px;
+      max-height: 620px;
+      background: #fafafa;
+      color: #1a1a1a;
+      overflow-y: auto;
+    }
+    .header {
+      padding: 12px 14px;
+      background: white;
+      border-bottom: 1px solid #e0e0e0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      flex: 1;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #999;
+      transition: background 0.2s;
+    }
+    .status-dot.connected { background: #0f9d58; }
+    .status-dot.connecting { background: #f4b400; animation: pulse 1s infinite; }
+    .status-dot.error { background: #db4437; }
+    @keyframes pulse { 50% { opacity: 0.4; } }
+    .status-text {
+      font-size: 12px;
+      color: #666;
+    }
+    .section {
+      padding: 12px 14px;
+      border-bottom: 1px solid #eee;
+    }
+    .section h2 {
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .input-group {
+      display: flex;
+      gap: 6px;
+    }
+    input[type="text"] {
+      flex: 1;
+      padding: 7px 10px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: 'SF Mono', Monaco, monospace;
+      outline: none;
+    }
+    input[type="text"]:focus { border-color: #3ECF8E; }
+    button {
+      padding: 7px 14px;
+      border: none;
+      border-radius: 6px;
+      background: #3ECF8E;
+      color: white;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: #2EAF6E; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    button.secondary {
+      background: white;
+      color: #3ECF8E;
+      border: 1px solid #3ECF8E;
+    }
+    button.secondary:hover:not(:disabled) { background: #e6f7ef; }
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+    }
+    .stat {
+      background: white;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #eee;
+    }
+    .stat-label {
+      font-size: 10px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .stat-value {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1a1a1a;
+      font-family: 'SF Mono', Monaco, monospace;
+    }
+    .stat-value.failed { color: #db4437; }
+    .log-area {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 8px;
+      border-radius: 6px;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 10px;
+      line-height: 1.4;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .log-entry { padding: 2px 0; }
+    .log-entry.info { color: #d4d4d4; }
+    .log-entry.warn { color: #f4b400; }
+    .log-entry.error { color: #db4437; }
+    .log-entry.debug { color: #888; }
+    .log-time { color: #666; margin-right: 6px; }
+    .log-level { color: #3ECF8E; margin-right: 4px; font-weight: 600; }
+    .agent-id {
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 10px;
+      color: #888;
+      padding: 4px 8px;
+      background: #f0f0f0;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
+      font-size: 12px;
+      color: #666;
+    }
+    .instructions {
+      background: #fff8e1;
+      border: 1px solid #ffe082;
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      line-height: 1.5;
+      color: #5d4037;
+    }
+    .instructions strong { color: #3e2723; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Supabase Onboarding Bridge</h1>
+    <div class="status-dot" id="statusDot"></div>
+    <span class="status-text" id="statusText">Disconnected</span>
+  </div>
+
+  <div class="section">
+    <h2>Server Connection</h2>
+    <div class="input-group">
+      <input type="text" id="serverUrl" placeholder="wss://preview-chat-672657de-8fc2-47b1-8770-916464a90553.space-z.ai/ws" />
+      <button id="connectBtn">Connect</button>
+    </div>
+    <div class="checkbox-group">
+      <input type="checkbox" id="autoConnect" checked />
+      <label for="autoConnect">Auto-reconnect on startup</label>
+    </div>
+    <div style="margin-top: 6px;">
+      <span class="agent-id" id="agentId">ext-???</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Activity</h2>
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-label">Received</div>
+        <div class="stat-value" id="statReceived">0</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Completed</div>
+        <div class="stat-value" id="statCompleted">0</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Failed</div>
+        <div class="stat-value failed" id="statFailed">0</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Diagnostics Log <button class="secondary" id="clearLogBtn" style="float:right;padding:2px 8px;font-size:10px;">Clear</button></h2>
+    <div class="log-area" id="logArea"></div>
+  </div>
+
+  <div class="section">
+    <h2>Quick Start</h2>
+    <div class="instructions">
+      <strong>1.</strong> Run the Python backend: <code>python automate.py signup-ext --email you@privatimail.com --password 'StrongPass123!'</code><br>
+      <strong>2.</strong> Click <strong>Connect</strong> above (the Python server must be running first).<br>
+      <strong>3.</strong> The extension will open the Notion signup page automatically.<br>
+      <strong>4.</strong> Solve the hCaptcha when prompted — the extension captures the token.<br>
+      <strong>5.</strong> The Python backend completes the rest (email code, login, onboarding).
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Sandbox Page (zstd support)</h2>
+    <button id="openSandboxBtn" class="secondary" style="width:100%;padding:8px;">Open Sandbox Page</button>
+    <div style="font-size:11px;color:#666;margin-top:4px;">Required for AI chat (zstd decompression). Opens in a background tab.</div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

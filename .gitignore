@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+dist/
+build/
+
+# Env
+.env
+.env.local
+.venv/
+venv/
+
+# HARs (too large for git — see har/README.md)
+har/
+*.har
+!supabase.signup-pt1.har.zip
+!supabase.signup-pt2.har.zip
+!supabase.signup-pt1-tk2.har.zip
+
+# Local artifacts
+*.log
+*.pid
+.scratch/
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Generated
+download/
