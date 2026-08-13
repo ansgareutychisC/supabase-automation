@@ -541,7 +541,7 @@ export function dashboardHTML(): string {
   </div>
 </div>
 
-${inspectorHTML()}
+` + inspectorHTML() + `
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -930,7 +930,27 @@ accountsTbody.addEventListener("click", async (e) => {
 
 accountsSearch.addEventListener("input", applySearchFilter);
 accountsRefresh.addEventListener("click", refreshAccounts);
-document.getElementById("accounts-health-all").addEventListener("click", checkAllHealth);
+document.getElementById("accounts-health-all").addEventListener("click", function() { checkAllHealth(); });
+
+// Batch health check (defined here so the listener above can reference it)
+async function checkAllHealth() {
+  const ok = await confirmDialog("Run health check on ALL accounts? This will validate every PAT and JWT.");
+  if (!ok) return;
+  setAccountsStatus("info", "Running health check on all accounts...");
+  try {
+    const r = await fetch("/api/health-check-all", { method: "POST" });
+    const data = await r.json();
+    if (!data.ok) { setAccountsStatus("error", data.error || "Failed"); return; }
+    const s = data.summary;
+    setAccountsStatus(s.pat_invalid > 0 || s.disabled > 0 ? "error" : "success",
+      "Health check complete: " + s.healthy + "/" + s.total + " healthy - " +
+      s.pat_invalid + " PAT invalid - " + s.jwt_invalid + " JWT expired - " + s.disabled + " disabled");
+    toast("Checked " + s.total + " accounts", s.pat_invalid > 0 ? "error" : "success");
+    refreshAccounts();
+  } catch (e) {
+    setAccountsStatus("error", "Network error: " + e.message);
+  }
+}
 
 // Account actions
 async function copyPatForAccount(summary) {
@@ -969,7 +989,7 @@ async function deleteAccount(summary) {
   } catch (e) { toast("✗ Delete failed: " + e.message, "error"); }
 }
 
-${inspectorJS()}
+` + inspectorJS() + `
 
 // Import
 const importSinglePat = document.getElementById("import-single-pat");
