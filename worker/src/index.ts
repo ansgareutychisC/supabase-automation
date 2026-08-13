@@ -62,6 +62,17 @@ function getHub(c: any): DurableObjectStub {
     return ns.get(id);
 }
 
+// Helper: log an event to D1 event_logs table
+async function logEvent(db: D1Database, email: string, eventType: string, severity: string, message: string, details?: any) {
+    try {
+        await db.prepare(
+            'INSERT INTO event_logs (account_email, event_type, severity, message, details, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(email, eventType, severity, message, details ? JSON.stringify(details) : null, Date.now()).run();
+    } catch (e) {
+        console.error('Failed to log event:', e);
+    }
+}
+
 // --- Extension status ---
 app.get('/api/extensions', async (c) => {
     const hub = getHub(c);
@@ -202,26 +213,55 @@ app.post('/api/run', async (c) => {
     // Run pipeline asynchronously
     c.executionCtx.waitUntil((async () => {
         const steps: any[] = [];
+        await logEvent(db, email, 'pipeline_started', 'info', `Pipeline started for ${email}`, { jobId, password });
         try {
             // Step 1: Signup via extension (hCaptcha)
             steps.push({ step: 'signup', status: 'running' });
-            await supa.signupViaExtension(email, password);
-            await db.prepare('UPDATE accounts SET status = ?, updated_at = ? WHERE email = ?')
-                .bind('signed_up', Date.now(), email).run();
-            steps[0].status = 'completed';
-            steps[0].note = 'hCaptcha solved by user in browser';
+            await logEvent(db, email, 'signup_started', 'info', 'Signup via extension (hCaptcha)');
+            try {
+                await supa.signupViaExtension(email, password);
+                await db.prepare('UPDATE accounts SET status = ?, updated_at = ? WHERE email = ?')
+                    .bind('signed_up', Date.now(), email).run();
+                steps[0].status = 'completed';
+                steps[0].note = 'hCaptcha solved by user in browser';
+                await logEvent(db, email, 'signup_completed', 'info', 'Signup succeeded (201)');
+            } catch (e) {
+                steps[0].status = 'failed';
+                steps[0].error = (e as Error).message;
+                await logEvent(db, email, 'signup_failed', 'error', `Signup failed: ${(e as Error).message}`, { error: (e as Error).stack });
+                throw e;
+            }
 
             // Step 2: Poll for verify email
             steps.push({ step: 'verify_email', status: 'running' });
-            const { url: verifyUrl } = await supa.waitForVerifyEmail(email, 300);
-            steps[1].status = 'completed';
+            await logEvent(db, email, 'verify_email_waiting', 'info', 'Waiting for verification email');
+            try {
+                const { url: verifyUrl } = await supa.waitForVerifyEmail(email, 300);
+                steps[1].status = 'completed';
+                steps[1].verifyUrl = verifyUrl.slice(0, 80) + '...';
+                await logEvent(db, email, 'verify_email_received', 'info', 'Verification email received');
+            } catch (e) {
+                steps[1].status = 'failed';
+                steps[1].error = (e as Error).message;
+                await logEvent(db, email, 'verify_email_timeout', 'error', `No verification email within 300s: ${(e as Error).message}`);
+                throw e;
+            }
 
             // Step 3: Follow verify link
             steps.push({ step: 'verify', status: 'running' });
-            const tokens = await supa.verifyEmail(verifyUrl);
-            await db.prepare('UPDATE accounts SET access_token = ?, refresh_token = ?, token_expires_at = ?, status = ?, updated_at = ? WHERE email = ?')
-                .bind(tokens.accessToken, tokens.refreshToken, tokens.expiresAt, 'verified', Date.now(), email).run();
-            steps[2].status = 'completed';
+            let tokens: any;
+            try {
+                tokens = await supa.verifyEmail(steps[1].verifyUrl ? steps[1].verifyUrl.replace('...', '') : '');
+                await db.prepare('UPDATE accounts SET access_token = ?, refresh_token = ?, token_expires_at = ?, status = ?, updated_at = ? WHERE email = ?')
+                    .bind(tokens.accessToken, tokens.refreshToken, tokens.expiresAt, 'verified', Date.now(), email).run();
+                steps[2].status = 'completed';
+                await logEvent(db, email, 'verify_completed', 'info', 'Email verified, JWT obtained', { expires_in: tokens.expiresIn });
+            } catch (e) {
+                steps[2].status = 'failed';
+                steps[2].error = (e as Error).message;
+                await logEvent(db, email, 'verify_failed', 'error', `Verify failed: ${(e as Error).message}`);
+                throw e;
+            }
 
             // Step 4: Get user
             steps.push({ step: 'get_user', status: 'running' });
@@ -234,6 +274,7 @@ app.post('/api/run', async (c) => {
             await db.prepare('UPDATE accounts SET user_id = ?, profile_id = ?, status = ?, updated_at = ? WHERE email = ?')
                 .bind(user.id, profile.id, 'profiled', Date.now(), email).run();
             steps[4].status = 'completed';
+            await logEvent(db, email, 'profile_created', 'info', `Profile created: id=${profile.id}`);
 
             // Step 6: Create org
             steps.push({ step: 'org', status: 'running' });
@@ -241,6 +282,7 @@ app.post('/api/run', async (c) => {
             await db.prepare('UPDATE accounts SET org_id = ?, org_slug = ?, org_name = ?, plan_id = ?, status = ?, updated_at = ? WHERE email = ?')
                 .bind(org.id, org.slug, org.name, org.plan?.id || 'free', 'org_created', Date.now(), email).run();
             steps[5].status = 'completed';
+            await logEvent(db, email, 'org_created', 'info', `Org created: ${org.name} (slug=${org.slug})`);
 
             // Step 7: Generate PAT
             steps.push({ step: 'pat', status: 'running' });
@@ -250,6 +292,7 @@ app.post('/api/run', async (c) => {
                 .bind(pat.token, pat.id, pat.name, pat.token_alias, pat.expires_at, 'complete', Date.now(), email).run();
             steps[6].status = 'completed';
             steps[6].pat = pat.token;
+            await logEvent(db, email, 'pat_created', 'info', `PAT created: ${pat.token_alias}`);
 
             // Update job
             const report = {
@@ -260,13 +303,21 @@ app.post('/api/run', async (c) => {
             };
             await db.prepare('UPDATE jobs SET status = ?, result = ?, finished_at = ?, updated_at = ? WHERE id = ?')
                 .bind('completed', JSON.stringify(report), Date.now(), Date.now(), jobId).run();
+            await logEvent(db, email, 'pipeline_completed', 'info', 'Pipeline completed successfully', { pat: pat.token.slice(0, 12) + '...' });
         } catch (err) {
             const errorMsg = (err as Error).message;
-            steps.push({ step: 'error', status: 'failed', error: errorMsg });
+            const failedStep = steps.find(s => s.status === 'failed');
+            steps.push({ step: 'error', status: 'failed', error: errorMsg, failedStep: failedStep?.step });
             await db.prepare('UPDATE jobs SET status = ?, error = ?, result = ?, finished_at = ?, updated_at = ? WHERE id = ?')
                 .bind('failed', errorMsg, JSON.stringify({ steps }), Date.now(), Date.now(), jobId).run();
             await db.prepare('UPDATE accounts SET status = ?, updated_at = ? WHERE email = ?')
                 .bind('failed', Date.now(), email).run();
+            await logEvent(db, email, 'pipeline_failed', 'error', `Pipeline failed at step '${failedStep?.step || 'unknown'}': ${errorMsg}`, {
+                error: errorMsg,
+                stack: (err as Error).stack,
+                failedStep: failedStep?.step,
+                steps,
+            });
         }
     })());
 
@@ -477,10 +528,19 @@ app.post('/api/accounts/:id/health', async (c) => {
         if (newStatus !== account.status) {
             await db.prepare('UPDATE accounts SET status = ?, updated_at = ? WHERE email = ?')
                 .bind(newStatus, Date.now(), account.email).run();
+            await logEvent(db, account.email, 'status_changed', 'warn',
+                `Status changed: ${account.status} → ${newStatus}`,
+                { old: account.status, new: newStatus, health });
         }
+
+        // Log health check result
+        await logEvent(db, account.email, 'health_check', health.pat_valid ? 'info' : 'warn',
+            `Health: PAT=${health.pat_valid ? '✓' : '✗'} JWT=${health.jwt_valid ? '✓' : '✗'} standing=${health.account_standing}`,
+            { pat_valid: health.pat_valid, jwt_valid: health.jwt_valid, jwt_refreshed: health.jwt_refreshed, account_standing: health.account_standing, errors: health.errors });
 
         return c.json({ ok: true, email: account.email, health, status: newStatus });
     } catch (err) {
+        await logEvent(db, id, 'health_check_error', 'error', `Health check error: ${(err as Error).message}`);
         return c.json({ ok: false, error: (err as Error).message }, 500);
     }
 });
@@ -562,6 +622,109 @@ app.get('/api/accounts/:id/detail', async (c) => {
             access_token: account.access_token,
         },
     });
+});
+
+// --- Event logs (for inspector Logs tab) ---
+app.get('/api/accounts/:id/events', async (c) => {
+    const db = c.env.DB as D1Database;
+    const id = c.req.param('id');
+    const limit = parseInt(c.req.query('limit') || '50', 10);
+    const results = await db.prepare(
+        'SELECT id, event_type, severity, message, details, created_at FROM event_logs WHERE account_email = ? ORDER BY created_at DESC LIMIT ?'
+    ).bind(id, limit).all();
+    return c.json({ events: results.results });
+});
+
+// --- All recent events (system-wide) ---
+app.get('/api/events', async (c) => {
+    const db = c.env.DB as D1Database;
+    const limit = parseInt(c.req.query('limit') || '100', 10);
+    const severity = c.req.query('severity');
+    let query = 'SELECT id, account_email, event_type, severity, message, details, created_at FROM event_logs';
+    const params: any[] = [];
+    if (severity) {
+        query += ' WHERE severity = ?';
+        params.push(severity);
+    }
+    query += ' ORDER BY created_at DESC LIMIT ?';
+    params.push(limit);
+    const results = await db.prepare(query).bind(...params).all();
+    return c.json({ events: results.results });
+});
+
+// --- Billing + org data (for inspector Billing tab, requires JWT) ---
+app.post('/api/accounts/:id/billing', async (c) => {
+    const db = c.env.DB as D1Database;
+    const id = c.req.param('id');
+    const account = await db.prepare('SELECT access_token, refresh_token, org_slug FROM accounts WHERE email = ? OR user_id = ?').bind(id, id).first() as any;
+    if (!account) return c.json({ error: 'Not found' }, 404);
+    if (!account.access_token) return c.json({ error: 'No JWT stored — re-login needed' }, 400);
+    if (!account.org_slug) return c.json({ error: 'No org slug' }, 400);
+
+    const supa = new SupabaseAutomation(null as any, c.env);
+    try {
+        let jwt = account.access_token;
+        // Try to get billing data, refresh JWT if expired
+        try {
+            const [subscription, plans, invoices, usage] = await Promise.all([
+                supa.getBillingSubscription(jwt, account.org_slug),
+                supa.getBillingPlans(jwt, account.org_slug),
+                supa.getInvoices(jwt, account.org_slug),
+                supa.getOrgUsage(jwt, account.org_slug),
+            ]);
+            return c.json({ ok: true, subscription, plans, invoices, usage });
+        } catch (e) {
+            // JWT might be expired — try refresh
+            if (account.refresh_token) {
+                const newTokens = await supa.refreshJWT(account.refresh_token);
+                await db.prepare('UPDATE accounts SET access_token = ?, refresh_token = ?, token_expires_at = ?, updated_at = ? WHERE email = ?')
+                    .bind(newTokens.accessToken, newTokens.refreshToken, newTokens.expiresAt, Date.now(), id).run();
+                jwt = newTokens.accessToken;
+                const [subscription, plans, invoices, usage] = await Promise.all([
+                    supa.getBillingSubscription(jwt, account.org_slug),
+                    supa.getBillingPlans(jwt, account.org_slug),
+                    supa.getInvoices(jwt, account.org_slug),
+                    supa.getOrgUsage(jwt, account.org_slug),
+                ]);
+                return c.json({ ok: true, subscription, plans, invoices, usage });
+            }
+            throw e;
+        }
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 502);
+    }
+});
+
+// --- Projects data (for inspector Projects tab, uses PAT) ---
+app.post('/api/accounts/:id/projects', async (c) => {
+    const db = c.env.DB as D1Database;
+    const id = c.req.param('id');
+    const account = await db.prepare('SELECT pat FROM accounts WHERE email = ? OR user_id = ?').bind(id, id).first() as any;
+    if (!account) return c.json({ error: 'Not found' }, 404);
+    if (!account.pat) return c.json({ error: 'No PAT stored' }, 400);
+
+    try {
+        const r = await fetch('https://api.supabase.com/v1/projects', {
+            headers: { 'Authorization': `Bearer ${account.pat}` },
+        });
+        if (!r.ok) return c.json({ ok: false, error: `Failed: ${r.status}` }, r.status as any);
+        const projects: any[] = await r.json();
+        // For each project, get its status
+        const detailedProjects = await Promise.all(projects.map(async (p: any) => {
+            try {
+                const statusR = await fetch(`https://api.supabase.com/v1/projects/${p.ref}`, {
+                    headers: { 'Authorization': `Bearer ${account.pat}` },
+                });
+                const detail: any = statusR.ok ? await statusR.json() : {};
+                return { ...p, ...detail };
+            } catch {
+                return p;
+            }
+        }));
+        return c.json({ ok: true, projects: detailedProjects });
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 502);
+    }
 });
 
 // --- WebSocket upgrade for extension + dashboard ---
