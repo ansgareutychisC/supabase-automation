@@ -439,6 +439,131 @@ app.delete('/api/pats/:id', async (c) => {
     }
 });
 
+// --- Health check (individual account) ---
+// Checks PAT validity, JWT validity, account standing, project status
+app.post('/api/accounts/:id/health', async (c) => {
+    const db = c.env.DB as D1Database;
+    const id = c.req.param('id');
+    const account = await db.prepare('SELECT * FROM accounts WHERE email = ? OR user_id = ?').bind(id, id).first() as any;
+    if (!account) return c.json({ error: 'Not found' }, 404);
+
+    const supa = new SupabaseAutomation(null as any, c.env);
+    try {
+        const health = await supa.checkHealth(
+            account.pat || '',
+            account.access_token || undefined,
+            account.refresh_token || undefined,
+        );
+
+        // Update D1 with refreshed JWT if we got one
+        if (health.jwt_refreshed) {
+            // Re-check with fresh JWT to get the new tokens
+            try {
+                const newTokens = await supa.refreshJWT(account.refresh_token);
+                await db.prepare('UPDATE accounts SET access_token = ?, refresh_token = ?, token_expires_at = ?, updated_at = ? WHERE email = ?')
+                    .bind(newTokens.accessToken, newTokens.refreshToken, newTokens.expiresAt, Date.now(), account.email).run();
+            } catch {}
+        }
+
+        // Update account status based on health
+        let newStatus = account.status;
+        if (!health.pat_valid && !health.jwt_valid) {
+            newStatus = 'tokens_invalid';
+        } else if (health.account_standing === 'disabled') {
+            newStatus = 'disabled';
+        } else if (health.pat_valid && health.jwt_valid) {
+            newStatus = 'healthy';
+        }
+        if (newStatus !== account.status) {
+            await db.prepare('UPDATE accounts SET status = ?, updated_at = ? WHERE email = ?')
+                .bind(newStatus, Date.now(), account.email).run();
+        }
+
+        return c.json({ ok: true, email: account.email, health, status: newStatus });
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 500);
+    }
+});
+
+// --- Health check (batch — all accounts) ---
+app.post('/api/health-check-all', async (c) => {
+    const db = c.env.DB as D1Database;
+    const results = await db.prepare('SELECT email, pat, access_token, refresh_token, status FROM accounts ORDER BY created_at DESC LIMIT 200').all();
+    const supa = new SupabaseAutomation(null as any, c.env);
+
+    const reports: any[] = [];
+    for (const account of results.results as any[]) {
+        if (!account.pat) {
+            reports.push({ email: account.email, status: 'no_pat', pat_valid: false, jwt_valid: false });
+            continue;
+        }
+        try {
+            const health = await supa.checkHealth(
+                account.pat,
+                account.access_token || undefined,
+                account.refresh_token || undefined,
+            );
+            reports.push({
+                email: account.email,
+                pat_valid: health.pat_valid,
+                jwt_valid: health.jwt_valid,
+                jwt_refreshed: health.jwt_refreshed,
+                account_standing: health.account_standing,
+                org_count: health.organizations.length,
+                project_count: health.projects.length,
+                errors: health.errors,
+            });
+
+            // Update status
+            let newStatus = account.status;
+            if (!health.pat_valid && !health.jwt_valid) newStatus = 'tokens_invalid';
+            else if (health.account_standing === 'disabled') newStatus = 'disabled';
+            else if (health.pat_valid && health.jwt_valid) newStatus = 'healthy';
+            if (newStatus !== account.status) {
+                await db.prepare('UPDATE accounts SET status = ?, updated_at = ? WHERE email = ?')
+                    .bind(newStatus, Date.now(), account.email).run();
+            }
+        } catch (err) {
+            reports.push({ email: account.email, error: (err as Error).message });
+        }
+    }
+
+    const summary = {
+        total: reports.length,
+        healthy: reports.filter(r => r.pat_valid && r.jwt_valid).length,
+        pat_invalid: reports.filter(r => !r.pat_valid).length,
+        jwt_invalid: reports.filter(r => r.pat_valid && !r.jwt_valid).length,
+        disabled: reports.filter(r => r.account_standing === 'disabled').length,
+    };
+
+    return c.json({ ok: true, summary, reports });
+});
+
+// --- Account detail (inspector data) ---
+// Returns full account details for the inspector panel
+app.get('/api/accounts/:id/detail', async (c) => {
+    const db = c.env.DB as D1Database;
+    const id = c.req.param('id');
+    const account = await db.prepare('SELECT * FROM accounts WHERE email = ? OR user_id = ?').bind(id, id).first() as any;
+    if (!account) return c.json({ error: 'Not found' }, 404);
+
+    // Don't return full PAT/JWT in the list — only on explicit detail request
+    // Mask the PAT for display
+    const patMasked = account.pat ? account.pat.slice(0, 8) + '••••••••' + account.pat.slice(-4) : null;
+    const jwtMasked = account.access_token ? account.access_token.slice(0, 20) + '...' : null;
+
+    return c.json({
+        account: {
+            ...account,
+            pat_masked: patMasked,
+            jwt_masked: jwtMasked,
+            // Keep full pat + access_token for health check / copy
+            pat: account.pat,
+            access_token: account.access_token,
+        },
+    });
+});
+
 // --- WebSocket upgrade for extension + dashboard ---
 app.get('/ws', async (c) => {
     const hub = getHub(c);

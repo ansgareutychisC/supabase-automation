@@ -486,4 +486,122 @@ export class SupabaseAutomation {
     async deletePAT(accessToken: string, patId: number): Promise<any> {
         return this.platformDelete(accessToken, `/platform/profile/access-tokens/${patId}`);
     }
+
+    // --- Health check ---
+    //
+    // Checks the standing of an account: PAT validity, JWT validity,
+    // account standing (banned/disabled?), project status, org status.
+    // Returns a structured report.
+
+    async checkHealth(pat: string, accessToken?: string, refreshToken?: string): Promise<{
+        pat_valid: boolean;
+        jwt_valid: boolean;
+        jwt_refreshed: boolean;
+        account_standing: string;  // 'good' | 'banned' | 'disabled' | 'unknown'
+        profile: any | null;
+        organizations: any[];
+        projects: any[];
+        errors: string[];
+    }> {
+        const errors: string[] = [];
+        let pat_valid = false;
+        let jwt_valid = false;
+        let jwt_refreshed = false;
+        let account_standing = 'unknown';
+        let profile: any = null;
+        let organizations: any[] = [];
+        let projects: any[] = [];
+
+        // 1. Check PAT validity (GET /v1/organizations)
+        try {
+            const r = await fetch(`${SUPABASE_API}/v1/organizations`, {
+                headers: { 'Authorization': `Bearer ${pat}` },
+            });
+            if (r.ok) {
+                pat_valid = true;
+                organizations = await r.json();
+            } else if (r.status === 401) {
+                errors.push('PAT invalid or revoked');
+            } else {
+                errors.push(`PAT check returned ${r.status}`);
+            }
+        } catch (e) {
+            errors.push(`PAT check error: ${(e as Error).message}`);
+        }
+
+        // 2. Check JWT validity (GET /platform/profile)
+        if (accessToken) {
+            try {
+                const r = await fetch(`${SUPABASE_API}/platform/profile`, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Origin': 'https://supabase.com',
+                    },
+                });
+                if (r.ok) {
+                    jwt_valid = true;
+                    profile = await r.json();
+                    // Check account standing from profile
+                    if (profile.disabled_features && profile.disabled_features.length > 0) {
+                        account_standing = 'disabled';
+                    } else {
+                        account_standing = 'good';
+                    }
+                } else if (r.status === 401 && refreshToken) {
+                    // Try refreshing the JWT
+                    try {
+                        const newTokens = await this.refreshJWT(refreshToken);
+                        jwt_refreshed = true;
+                        // Retry with new JWT
+                        const r2 = await fetch(`${SUPABASE_API}/platform/profile`, {
+                            headers: {
+                                'Authorization': `Bearer ${newTokens.accessToken}`,
+                                'Origin': 'https://supabase.com',
+                            },
+                        });
+                        if (r2.ok) {
+                            jwt_valid = true;
+                            profile = await r2.json();
+                            account_standing = (profile.disabled_features && profile.disabled_features.length > 0) ? 'disabled' : 'good';
+                        } else {
+                            errors.push(`JWT refresh succeeded but profile fetch failed: ${r2.status}`);
+                        }
+                    } catch (refreshErr) {
+                        errors.push(`JWT refresh failed: ${(refreshErr as Error).message}`);
+                    }
+                } else if (r.status === 401) {
+                    errors.push('JWT expired and no refresh token');
+                } else {
+                    errors.push(`JWT check returned ${r.status}`);
+                }
+            } catch (e) {
+                errors.push(`JWT check error: ${(e as Error).message}`);
+            }
+        }
+
+        // 3. List projects (via PAT if valid)
+        if (pat_valid) {
+            try {
+                const r = await fetch(`${SUPABASE_API}/v1/projects`, {
+                    headers: { 'Authorization': `Bearer ${pat}` },
+                });
+                if (r.ok) {
+                    projects = await r.json();
+                }
+            } catch (e) {
+                errors.push(`Project list error: ${(e as Error).message}`);
+            }
+        }
+
+        return {
+            pat_valid,
+            jwt_valid,
+            jwt_refreshed,
+            account_standing,
+            profile,
+            organizations,
+            projects,
+            errors,
+        };
+    }
 }

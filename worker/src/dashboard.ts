@@ -441,6 +441,7 @@ export function dashboardHTML(): string {
 <div class="accounts-toolbar">
   <input type="search" id="accounts-search" placeholder="Search by email, user ID, or org…">
   <button class="secondary" id="accounts-refresh">Refresh <span class="key" style="background:var(--kbd-bg); padding:0 4px; border-radius:3px; font-size:10px; margin-left:2px">r</span></button>
+  <button class="secondary" id="accounts-health-all">Check All Health</button>
   <span class="count" id="accounts-count"></span>
 </div>
 <div class="status" id="accounts-status" style="display:none"></div>
@@ -494,7 +495,7 @@ export function dashboardHTML(): string {
 </div>
 
 <p class="hint">
-  Tip: <kbd>j</kbd>/<kbd>k</kbd> or arrow keys to navigate · <kbd>Enter</kbd> to open reset link ·
+  Tip: <kbd>j</kbd>/<kbd>k</kbd> or arrow keys to navigate · <kbd>Enter</kbd> or <kbd>i</kbd> to open inspector ·
   <kbd>c</kbd> to copy PAT · <kbd>r</kbd> to refresh · <kbd>?</kbd> for full list.
 </p>
 </div>
@@ -513,7 +514,7 @@ export function dashboardHTML(): string {
       <div>Refresh accounts list</div><div><kbd>r</kbd></div>
       <div>Move selection down</div><div><kbd>j</kbd> or <kbd>↓</kbd></div>
       <div>Move selection up</div><div><kbd>k</kbd> or <kbd>↑</kbd></div>
-      <div>Open reset link for selected</div><div><kbd>Enter</kbd></div>
+      <div>Open inspector for selected</div><div><kbd>Enter</kbd> or <kbd>i</kbd></div>
       <div>Copy PAT for selected</div><div><kbd>c</kbd></div>
       <div>Delete selected account</div><div><kbd>d</kbd></div>
       <div>Close overlay / clear selection</div><div><kbd>Esc</kbd></div>
@@ -533,6 +534,15 @@ export function dashboardHTML(): string {
       <button type="button" class="secondary" id="confirm-cancel">Cancel</button>
       <button type="button" id="confirm-ok" class="submit-btn" style="width:auto;margin-top:0;padding:0.5rem 1.2rem;font-size:14px">Confirm</button>
     </div>
+  </div>
+</div>
+
+<!-- Inspector panel (slides in from right) -->
+<div class="overlay" id="inspector-overlay" role="dialog" aria-modal="true" aria-labelledby="inspector-title">
+  <div class="overlay-card" style="max-width:680px;max-height:90vh">
+    <button class="overlay-close" id="inspector-close" aria-label="Close">×</button>
+    <h2 id="inspector-title" style="font-size:1.1rem;margin-bottom:0.5rem">Account Details</h2>
+    <div id="inspector-body" style="font-size:13px;line-height:1.6"></div>
   </div>
 </div>
 
@@ -891,8 +901,8 @@ function renderAccounts() {
       '<td><span class="badge ' + (a.status === "complete" ? "ok" : a.status === "failed" ? "warn" : "") + '">' + escapeHtml(a.status || "—") + '</span></td>' +
       '<td class="created" title="' + escapeHtml(new Date(a.created_at).toISOString()) + '">' + fmtRelative(a.created_at) + '</td>' +
       '<td><div class="row-actions">' +
-        '<button class="secondary" data-act="copy-pat" title="Copy PAT (c)">Copy PAT</button>' +
-        '<button class="secondary" data-act="relogin" title="Send password reset">Re-login</button>' +
+        '<button class="secondary" data-act="inspect" title="Open inspector (Enter/i)">Inspect</button>' +
+        '<button class="secondary" data-act="copy-pat" title="Copy PAT (c)">PAT</button>' +
         '<button class="danger" data-act="delete" title="Delete (d)">Del</button>' +
       '</div></td>' +
     '</tr>';
@@ -909,7 +919,8 @@ accountsTbody.addEventListener("click", async (e) => {
     const a = filteredAccounts[idx];
     if (!a) return;
     const act = btn.dataset.act;
-    if (act === "copy-pat") await copyPatForAccount(a);
+    if (act === "inspect") openInspector(a.email);
+    else if (act === "copy-pat") await copyPatForAccount(a);
     else if (act === "relogin") await reloginAccount(a);
     else if (act === "delete") await deleteAccount(a);
     return;
@@ -922,6 +933,7 @@ accountsTbody.addEventListener("click", async (e) => {
 
 accountsSearch.addEventListener("input", applySearchFilter);
 accountsRefresh.addEventListener("click", refreshAccounts);
+document.getElementById("accounts-health-all").addEventListener("click", checkAllHealth);
 
 // Account actions
 async function copyPatForAccount(summary) {
@@ -958,6 +970,141 @@ async function deleteAccount(summary) {
     toast("✓ Deleted", "success");
     refreshAccounts();
   } catch (e) { toast("✗ Delete failed: " + e.message, "error"); }
+}
+
+// ───────────── Inspector panel ─────────────
+const inspectorOverlay = document.getElementById("inspector-overlay");
+const inspectorClose = document.getElementById("inspector-close");
+const inspectorBody = document.getElementById("inspector-body");
+
+function openInspector(email) {
+  fetch("/api/accounts/" + encodeURIComponent(email) + "/detail")
+    .then(r => r.json())
+    .then(data => {
+      if (!data.account) { toast("✗ Not found", "error"); return; }
+      const a = data.account;
+      const fmtTs = (ts) => ts ? new Date(ts).toLocaleString() : "—";
+      const fmtDur = (ts) => {
+        if (!ts) return "—";
+        const diff = Date.now() - new Date(ts).getTime();
+        if (diff < 0) return "in " + Math.abs(Math.round(diff / 86400000)) + " days";
+        return Math.round(diff / 86400000) + " days ago";
+      };
+
+      inspectorBody.innerHTML = \`
+<div style="display:grid;gap:0.75rem">
+          <div>
+            <div style="font-weight:600;font-size:14px;margin-bottom:0.35rem;color:var(--accent)">Status: \${escapeHtml(a.status || "—")}</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem 1.5rem;font-size:12px">
+              <div><span style="color:var(--muted)">Email:</span> \${escapeHtml(a.email || "—")}</div>
+              <div><span style="color:var(--muted)">User ID:</span> <code style="font-size:11px">\${escapeHtml((a.user_id || "—").slice(0, 36))}</code></div>
+              <div><span style="color:var(--muted)">Profile ID:</span> \${a.profile_id || "—"}</div>
+              <div><span style="color:var(--muted)">Plan:</span> \${escapeHtml(a.plan_id || "free")}</div>
+              <div><span style="color:var(--muted)">Org:</span> \${escapeHtml(a.org_name || "—")} (\${escapeHtml(a.org_slug || "—")})</div>
+              <div><span style="color:var(--muted)">Created:</span> \${fmtTs(a.created_at)}</div>
+            </div>
+          </div>
+
+          <div>
+            <div style="font-weight:600;font-size:13px;margin-bottom:0.35rem">PAT (Personal Access Token)</div>
+            <div style="display:flex;align-items:center;gap:0.5rem">
+              <code style="font-size:11px;background:var(--code-bg);padding:4px 8px;border-radius:4px;flex:1;word-break:break-all">\${escapeHtml(a.pat_masked || "—")}</code>
+              <button class="secondary" onclick="copyText('\${a.pat || ""}', '✓ PAT copied')" style="padding:4px 10px;font-size:11px">Copy</button>
+            </div>
+            <div style="font-size:11px;color:var(--muted);margin-top:0.25rem">
+              Name: \${escapeHtml(a.pat_name || "—")} · Expires: \${escapeHtml(a.pat_expires_at || "—")} (\${fmtDur(a.pat_expires_at)})
+            </div>
+          </div>
+
+          <div>
+            <div style="font-weight:600;font-size:13px;margin-bottom:0.35rem">JWT (Dashboard Access)</div>
+            <div style="font-size:12px;color:var(--muted)">
+              \${a.access_token ? "✓ Stored (expires " + fmtDur(a.token_expires_at ? a.token_expires_at * 1000 : null) + ")" : "✗ Not stored — re-login needed"}
+            </div>
+            <div style="font-size:11px;color:var(--muted);margin-top:0.15rem">
+              \${a.refresh_token ? "✓ Refresh token stored (can auto-refresh)" : "✗ No refresh token"}
+            </div>
+          </div>
+
+          <div id="health-section">
+            <div style="font-weight:600;font-size:13px;margin-bottom:0.35rem">Health Check</div>
+            <div style="display:flex;gap:0.5rem">
+              <button class="secondary" id="check-health-btn" onclick="checkHealth('\${escapeHtml(a.email)}')" style="padding:5px 12px;font-size:12px">Check Health</button>
+            </div>
+            <div id="health-results" style="margin-top:0.5rem"></div>
+          </div>
+
+          <div>
+            <div style="font-weight:600;font-size:13px;margin-bottom:0.35rem">Actions</div>
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+              <button class="secondary" onclick="copyPatForAccount({email:'\${escapeHtml(a.email)}'})" style="padding:5px 12px;font-size:12px">Copy PAT</button>
+              <button class="secondary" onclick="reloginAccount({email:'\${escapeHtml(a.email)}'})" style="padding:5px 12px;font-size:12px">Re-login</button>
+              <button class="danger" onclick="deleteAccount({email:'\${escapeHtml(a.email)}'});closeInspector()" style="padding:5px 12px;font-size:12px">Delete</button>
+            </div>
+          </div>
+
+          \${a.onboarding_report && a.onboarding_report !== "{}" ? \`<details style="margin-top:0.5rem"><summary style="cursor:pointer;font-weight:600;font-size:12px">Onboarding Report</summary><pre style="margin-top:0.5rem;font-size:11px;max-height:200px;overflow:auto">\${escapeHtml(JSON.stringify(JSON.parse(a.onboarding_report), null, 2))}</pre></details>\` : ""}
+        </div>\`;
+      inspectorOverlay.classList.add("open");
+    })
+    .catch(e => toast("✗ Inspector error: " + e.message, "error"));
+}
+
+function closeInspector() {
+  inspectorOverlay.classList.remove("open");
+}
+inspectorClose.addEventListener("click", closeInspector);
+inspectorOverlay.addEventListener("click", (e) => { if (e.target === inspectorOverlay) closeInspector(); });
+
+async function checkHealth(email) {
+  const btn = document.getElementById("check-health-btn");
+  const results = document.getElementById("health-results");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="row-spinner"></span> Checking…';
+  results.innerHTML = '<span class="spinner"></span> Running health checks…';
+  try {
+    const r = await fetch("/api/accounts/" + encodeURIComponent(email) + "/health", { method: "POST" });
+    const data = await r.json();
+    if (!data.ok) { results.innerHTML = '<span style="color:var(--error)">✗ ' + escapeHtml(data.error || "Failed") + '</span>'; return; }
+    const h = data.health;
+    results.innerHTML = \`
+<div style="display:grid;gap:0.35rem;font-size:12px">
+        <div style="color:\${h.pat_valid ? 'var(--success)' : 'var(--error)'}">\${h.pat_valid ? '✓' : '✗'} PAT valid</div>
+        <div style="color:\${h.jwt_valid ? 'var(--success)' : 'var(--error)'}">\${h.jwt_valid ? '✓' : '✗'} JWT valid\${h.jwt_refreshed ? ' (refreshed during check)' : ''}</div>
+        <div style="color:\${h.account_standing === 'good' ? 'var(--success)' : 'var(--error)'}">\${h.account_standing === 'good' ? '✓' : '⚠'} Account standing: \${escapeHtml(h.account_standing)}</div>
+        <div>Organizations: \${h.organizations.length}</div>
+        <div>Projects: \${h.projects.length}</div>
+        \${h.projects.length > 0 ? \`<div style="font-size:11px;color:var(--muted);padding-left:1rem">\${h.projects.map(p => escapeHtml(p.name || p.id) + ' (' + escapeHtml(p.status || '?') + ')').join(', ')}</div>\` : ''}
+        \${h.errors.length > 0 ? \`<div style="color:var(--error);font-size:11px;padding-left:1rem">Errors: \${h.errors.map(e => escapeHtml(e)).join('; ')}</div>\` : ''}
+      </div>\`;
+    toast("✓ Health check complete: " + (h.pat_valid && h.jwt_valid ? "healthy" : "issues found"), h.pat_valid && h.jwt_valid ? "success" : "error");
+    refreshAccounts();
+  } catch (e) {
+    results.innerHTML = '<span style="color:var(--error)">✗ Error: ' + escapeHtml(e.message) + '</span>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Check Health";
+  }
+}
+
+// Batch health check
+async function checkAllHealth() {
+  const ok = await confirmDialog("Run health check on ALL accounts? This will validate every PAT and JWT.");
+  if (!ok) return;
+  setAccountsStatus("info", "⏳ Running health check on all accounts…");
+  try {
+    const r = await fetch("/api/health-check-all", { method: "POST" });
+    const data = await r.json();
+    if (!data.ok) { setAccountsStatus("error", data.error || "Failed"); return; }
+    const s = data.summary;
+    setAccountsStatus(s.pat_invalid > 0 || s.disabled > 0 ? "error" : "success",
+      "Health check complete: " + s.healthy + "/" + s.total + " healthy · " +
+      s.pat_invalid + " PAT invalid · " + s.jwt_invalid + " JWT expired · " + s.disabled + " disabled");
+    toast("✓ Checked " + s.total + " accounts", s.pat_invalid > 0 ? "error" : "success");
+    refreshAccounts();
+  } catch (e) {
+    setAccountsStatus("error", "Network error: " + e.message);
+  }
 }
 
 // Import
@@ -1038,12 +1185,12 @@ document.addEventListener("keydown", (e) => {
     if (isInput && t.id === "accounts-search") {
       e.preventDefault();
       const a = selectedAccount();
-      if (a) reloginAccount(a);
+      if (a) openInspector(a.email);
       return;
     }
     if (!isInput) {
       const a = selectedAccount();
-      if (a) { e.preventDefault(); reloginAccount(a); }
+      if (a) { e.preventDefault(); openInspector(a.email); }
     }
     return;
   }
@@ -1070,6 +1217,7 @@ document.addEventListener("keydown", (e) => {
     case "k": case "ArrowUp": e.preventDefault(); if (currentView !== "accounts") switchView("accounts"); moveSelection(-1); break;
     case "c": { e.preventDefault(); const a = selectedAccount(); if (a) copyPatForAccount(a); else toast("No account selected", "error"); break; }
     case "d": { e.preventDefault(); const a = selectedAccount(); if (a) deleteAccount(a); else toast("No account selected", "error"); break; }
+    case "i": { e.preventDefault(); const a = selectedAccount(); if (a) openInspector(a.email); else toast("No account selected", "error"); break; }
   }
 });
 
