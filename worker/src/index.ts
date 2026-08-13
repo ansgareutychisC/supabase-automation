@@ -295,6 +295,150 @@ app.get('/', (c) => {
 
 // (dashboardHTML moved to dashboard.ts)
 
+// --- JWT refresh endpoint ---
+// Refreshes a JWT using the refresh_token from the verify flow.
+// The refresh_token ROTATES — the old one is invalidated.
+app.post('/api/refresh-jwt', async (c) => {
+    const body = await c.req.json();
+    if (!body.refreshToken) {
+        return c.json({ error: 'Missing refreshToken' }, 400);
+    }
+    const supa = new SupabaseAutomation(null as any, c.env);
+    try {
+        const tokens = await supa.refreshJWT(body.refreshToken);
+        return c.json({ ok: true, ...tokens });
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 500);
+    }
+});
+
+// --- /platform/* proxy endpoints (require JWT, not PAT) ---
+// These let the dashboard call /platform/* endpoints via the worker
+// (avoids CORS + centralizes JWT refresh logic)
+
+app.post('/api/platform/*', async (c) => {
+    const body = await c.req.json();
+    const accessToken = body.accessToken;
+    const method = body.method || 'GET';
+    const path = body.path;
+    const reqBody = body.body;
+
+    if (!accessToken || !path) {
+        return c.json({ error: 'Missing accessToken or path' }, 400);
+    }
+
+    const supa = new SupabaseAutomation(null as any, c.env);
+    try {
+        let result: any;
+        if (method === 'GET') {
+            result = await supa.platformGet(accessToken, path);
+        } else if (method === 'PATCH') {
+            result = await supa.platformPatch(accessToken, path, reqBody);
+        } else if (method === 'DELETE') {
+            result = await supa.platformDelete(accessToken, path);
+        } else {
+            return c.json({ error: `Unsupported method: ${method}` }, 400);
+        }
+        return c.json({ ok: true, data: result });
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 502);
+    }
+});
+
+// --- Billing endpoints (convenience wrappers) ---
+
+app.get('/api/billing/:slug/subscription', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const supa = new SupabaseAutomation(null as any, c.env);
+    try {
+        const data = await supa.getBillingSubscription(body.accessToken, c.req.param('slug'));
+        return c.json({ ok: true, data });
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 502);
+    }
+});
+
+app.get('/api/billing/:slug/plans', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const supa = new SupabaseAutomation(null as any, c.env);
+    try {
+        const data = await supa.getBillingPlans(body.accessToken, c.req.param('slug'));
+        return c.json({ ok: true, data });
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 502);
+    }
+});
+
+app.get('/api/billing/:slug/invoices', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const supa = new SupabaseAutomation(null as any, c.env);
+    try {
+        const data = await supa.getInvoices(body.accessToken, c.req.param('slug'));
+        return c.json({ ok: true, data });
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 502);
+    }
+});
+
+app.get('/api/billing/:slug/usage', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const supa = new SupabaseAutomation(null as any, c.env);
+    try {
+        const data = await supa.getOrgUsage(body.accessToken, c.req.param('slug'));
+        return c.json({ ok: true, data });
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 502);
+    }
+});
+
+// --- Org management (mutating) ---
+
+app.post('/api/orgs/:slug/rename', async (c) => {
+    const body = await c.req.json();
+    const supa = new SupabaseAutomation(null as any, c.env);
+    try {
+        const data = await supa.renameOrg(body.accessToken, c.req.param('slug'), body.name);
+        return c.json({ ok: true, data });
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 502);
+    }
+});
+
+app.delete('/api/orgs/:slug', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const supa = new SupabaseAutomation(null as any, c.env);
+    try {
+        const data = await supa.deleteOrg(body.accessToken, c.req.param('slug'));
+        return c.json({ ok: true, data });
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 502);
+    }
+});
+
+// --- PAT lifecycle (JWT-authenticated) ---
+
+app.get('/api/pats', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const supa = new SupabaseAutomation(null as any, c.env);
+    try {
+        const data = await supa.listPATs(body.accessToken);
+        return c.json({ ok: true, data });
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 502);
+    }
+});
+
+app.delete('/api/pats/:id', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const supa = new SupabaseAutomation(null as any, c.env);
+    try {
+        const data = await supa.deletePAT(body.accessToken, parseInt(c.req.param('id'), 10));
+        return c.json({ ok: true, data });
+    } catch (err) {
+        return c.json({ ok: false, error: (err as Error).message }, 502);
+    }
+});
+
 // --- WebSocket upgrade for extension + dashboard ---
 app.get('/ws', async (c) => {
     const hub = getHub(c);

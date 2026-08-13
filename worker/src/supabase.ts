@@ -349,4 +349,141 @@ export class SupabaseAutomation {
         });
         return r.ok;
     }
+
+    // --- JWT refresh (for long-lived /platform/* access) ---
+    //
+    // The JWT from verify expires in 30 min. The refresh_token (also from verify)
+    // can be used to get a fresh JWT. The refresh_token ROTATES on each refresh.
+
+    async refreshJWT(refreshToken: string): Promise<{
+        accessToken: string;
+        refreshToken: string;
+        expiresAt: number;
+        expiresIn: number;
+    }> {
+        const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1cGFidGFzZSIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNjQ1NzI4MDAwLCJleHAiOjIwMDAwMDAwMDB9.XQQwMjyZmhQOjG3iG8pT';
+        const r = await fetch(`${SUPABASE_AUTH}/token?grant_type=refresh_token`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${ANON_KEY}`,
+                'x-client-info': 'gotrue-js/2.112.3',
+            },
+            body: JSON.stringify({ refresh_token: refreshToken }),
+        });
+        if (!r.ok) {
+            throw new Error(`JWT refresh failed: ${r.status} ${await r.text()}`);
+        }
+        const data: any = await r.json();
+        return {
+            accessToken: data.access_token,
+            refreshToken: data.refresh_token,
+            expiresAt: data.expires_at,
+            expiresIn: data.expires_in,
+        };
+    }
+
+    // --- /platform/* endpoints (require JWT, not PAT) ---
+    //
+    // These are undocumented dashboard endpoints discovered via live probing.
+    // They require the JWT (from verify/refresh), NOT the PAT.
+
+    async platformGet(accessToken: string, path: string): Promise<any> {
+        const r = await fetch(`${SUPABASE_API}${path}`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Origin': 'https://supabase.com',
+                'Referer': 'https://supabase.com/dashboard',
+            },
+        });
+        if (!r.ok) throw new Error(`GET ${path} failed: ${r.status} ${await r.text()}`);
+        return r.json();
+    }
+
+    async platformPatch(accessToken: string, path: string, body: any): Promise<any> {
+        const r = await fetch(`${SUPABASE_API}${path}`, {
+            method: 'PATCH',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+                'Origin': 'https://supabase.com',
+                'Referer': 'https://supabase.com/dashboard',
+            },
+            body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error(`PATCH ${path} failed: ${r.status} ${await r.text()}`);
+        return r.json();
+    }
+
+    async platformDelete(accessToken: string, path: string): Promise<any> {
+        const r = await fetch(`${SUPABASE_API}${path}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Origin': 'https://supabase.com',
+                'Referer': 'https://supabase.com/dashboard',
+            },
+        });
+        if (!r.ok) throw new Error(`DELETE ${path} failed: ${r.status} ${await r.text()}`);
+        return r.json().catch(() => null);
+    }
+
+    // Billing (read-only)
+    async getBillingSubscription(accessToken: string, orgSlug: string): Promise<any> {
+        return this.platformGet(accessToken, `/platform/organizations/${orgSlug}/billing/subscription`);
+    }
+
+    async getBillingPlans(accessToken: string, orgSlug: string): Promise<any> {
+        return this.platformGet(accessToken, `/platform/organizations/${orgSlug}/billing/plans`);
+    }
+
+    async getInvoices(accessToken: string, orgSlug: string): Promise<any> {
+        return this.platformGet(accessToken, `/platform/organizations/${orgSlug}/billing/invoices`);
+    }
+
+    async getUpcomingInvoice(accessToken: string, orgSlug: string): Promise<any> {
+        return this.platformGet(accessToken, `/platform/organizations/${orgSlug}/billing/invoices/upcoming`);
+    }
+
+    async getOrgUsage(accessToken: string, orgSlug: string): Promise<any> {
+        return this.platformGet(accessToken, `/platform/organizations/${orgSlug}/usage`);
+    }
+
+    // Organization management
+    async renameOrg(accessToken: string, orgSlug: string, newName: string): Promise<any> {
+        return this.platformPatch(accessToken, `/platform/organizations/${orgSlug}`, { name: newName });
+    }
+
+    async deleteOrg(accessToken: string, orgSlug: string): Promise<any> {
+        return this.platformDelete(accessToken, `/platform/organizations/${orgSlug}`);
+    }
+
+    // Profile management
+    async updateProfile(accessToken: string, fields: { first_name?: string; last_name?: string; mobile?: string }): Promise<any> {
+        return this.platformPatch(accessToken, '/platform/profile', fields);
+    }
+
+    async getProfile(accessToken: string): Promise<any> {
+        return this.platformGet(accessToken, '/platform/profile');
+    }
+
+    async getPermissions(accessToken: string): Promise<any> {
+        return this.platformGet(accessToken, '/platform/profile/permissions');
+    }
+
+    // PAT lifecycle (JWT-authenticated, separate from the PAT itself)
+    async listPATs(accessToken: string): Promise<any[]> {
+        const r = await fetch(`${SUPABASE_API}/platform/profile/access-tokens`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Origin': 'https://supabase.com',
+            },
+        });
+        if (!r.ok) throw new Error(`List PATs failed: ${r.status}`);
+        return r.json();
+    }
+
+    async deletePAT(accessToken: string, patId: number): Promise<any> {
+        return this.platformDelete(accessToken, `/platform/profile/access-tokens/${patId}`);
+    }
 }

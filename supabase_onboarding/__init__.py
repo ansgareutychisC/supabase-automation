@@ -32,6 +32,7 @@ from .profile import create_profile, get_profile, PlatformProfile
 from .organization import create_organization, list_organizations, Organization
 from .access_token import create_access_token, list_access_tokens, AccessToken
 from .onboarding import OnboardingAutomation, OnboardingReport
+from .token_manager import TokenManager, TokenSet
 
 __all__ = [
     # Exceptions
