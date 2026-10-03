@@ -36,7 +36,7 @@ class AccessToken:
     id: int
     name: str
     token: str                   # the full sbp_... token (ONLY on creation)
-    token_alias: str             # masked version, e.g. "sbp_5ca2••••••••••4752"
+    token_alias: str             # masked version, e.g. "sbp_***••••••***"
     created_at: str              # ISO 8601
     expires_at: str              # ISO 8601
     last_used_at: str | None = None

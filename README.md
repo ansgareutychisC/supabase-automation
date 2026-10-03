@@ -348,7 +348,7 @@ python -m pytest tests/
   operation, generate a PAT first and use that instead.
 
 - **The PAT is shown ONCE at creation time.** The list endpoint returns
-  only the masked `token_alias` (e.g. `sbp_5ca2••••••••••4752`). Save
+  only the masked `token_alias` (e.g. `sbp_***••••••***`). Save
   the full token somewhere safe when you create it.
 
 - **Org creation always creates a PERSONAL free-tier org.** The HAR shows

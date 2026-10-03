@@ -353,7 +353,7 @@ Referer: https://supabase.com/dashboard/account/tokens
 ```json
 {
   "id": 6014190,
-  "token_alias": "sbp_5ca2••••••••••••••••••••••••••••••••4752",
+  "token_alias": "sbp_***••••••••••••***",
   "name": "new-token-30d",
   "created_at": "2026-08-12T09:36:57.153135+00:00",
   "expires_at": "2026-09-11T09:36:56.778+00:00",

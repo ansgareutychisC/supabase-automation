@@ -223,7 +223,7 @@ class TestAccessTokenParsing:
     def test_parses_created_token(self):
         data = {
             "id": 6014190,
-            "token_alias": "sbp_5ca2••••••••••••••••••••••••••••••••4752",
+            "token_alias": "sbp_***••••••••••••***",
             "name": "new-token-30d",
             "created_at": "2026-08-12T09:36:57.153135+00:00",
             "expires_at": "2026-09-11T09:36:56.778+00:00",
@@ -234,7 +234,7 @@ class TestAccessTokenParsing:
         assert t.id == 6014190
         assert t.name == "new-token-30d"
         assert t.token == "sbp_***TEST_TOKEN***"
-        assert t.token_alias.startswith("sbp_5ca2")
+        assert t.token_alias.startswith("sbp_***")
         assert t.token_alias.endswith("4752")
         assert t.last_used_at is None
 
@@ -242,7 +242,7 @@ class TestAccessTokenParsing:
         # The list endpoint doesn't return the full `token` field
         data = {
             "id": 6014190,
-            "token_alias": "sbp_5ca2••••••••••••••••••••••••••••••••4752",
+            "token_alias": "sbp_***••••••••••••***",
             "name": "new-token-30d",
             "created_at": "2026-08-12T09:36:57.153135+00:00",
             "expires_at": "2026-09-11T09:36:56.778+00:00",
