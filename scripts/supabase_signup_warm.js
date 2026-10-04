@@ -48,7 +48,7 @@ function genPassword() {
 }
 
 async function runAttempt(email, password) {
-  const { browser, ctx, tier } = await W.connect(TIER, { country: args.country || 'us' });
+  const { browser, ctx, tier } = await W.connect(tier, { country: args.country || 'us' });
   try {
     await W.wipeCookies(ctx);
     const page = await ctx.newPage();
@@ -118,6 +118,8 @@ async function runAttempt(email, password) {
 async function main() {
   W.log('start', `tier=${TIER} attempts=${ATTEMPTS}`);
   let lastErr;
+  let tier = TIER;   // flow-level escalation: free tier first; a failed
+                     // attempt (CF challenge loop etc.) escalates to zenrows
   for (let a = 1; a <= ATTEMPTS; a++) {
     const email = typeof args.email === 'string' && a === 1 ? args.email : freshEmail();
     try {
@@ -129,7 +131,11 @@ async function main() {
       return;
     } catch (e) {
       lastErr = e;
-      W.log('attempt', `${a}/${ATTEMPTS} failed: ${e.message}`);
+      W.log('attempt', `${a}/${ATTEMPTS} failed (tier=${tier}): ${e.message}`);
+      if (tier !== 'zenrows') {
+        tier = 'zenrows';           // doctrine: escalate, never stay on a
+        W.log('tier', 'escalating to zenrows for next attempts');  // failing free tier
+      }
       if (a < ATTEMPTS) await new Promise((r) => setTimeout(r, 12000));
     }
   }
