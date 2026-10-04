@@ -27,8 +27,8 @@ from backend.api import config
 from backend.api.drivers.base import (ServiceDriver, SignupOptions,
                                       TailOptions, _never_cancel, _noop)
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))))          # <repo>/supabase_onboarding/driver.py
+_REPO_ROOT = os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))           # <repo>/supabase_onboarding/driver.py
 _WARM_JS = os.path.join(_REPO_ROOT, "scripts", "supabase_signup_warm.js")
 
 # ---- plugin-local mail config (A8) ----------------------------------------
@@ -88,7 +88,7 @@ class SupabaseDriver(ServiceDriver):
             out["mail_api"] = (r.status_code == 200)
         except Exception as e:                           # pragma: no cover
             out["mail_api"] = f"FAIL: {e}"[:120]
-        out["ok"] = all(v is True for k, v in out.items() if k != "ok")
+        out["ok"] = all(v is True for k, v in out.items() if isinstance(v, bool))
         return out
 
     # ------------------------------------------------------------ signup
