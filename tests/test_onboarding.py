@@ -235,7 +235,7 @@ class TestAccessTokenParsing:
         assert t.name == "new-token-30d"
         assert t.token == "sbp_***TEST_TOKEN***"
         assert t.token_alias.startswith("sbp_***")
-        assert t.token_alias.endswith("4752")
+        assert t.token_alias.endswith("***")  # masked by redaction commit 05173c2
         assert t.last_used_at is None
 
     def test_parses_listed_token_no_full_token(self):
