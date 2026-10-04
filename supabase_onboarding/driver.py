@@ -186,8 +186,8 @@ class SupabaseDriver(ServiceDriver):
         """Plain-HTTP signup with an operator-provided hCaptcha token."""
         import secrets as _secrets
         email = opts.email or (
-            f"sb-manual-{int(time.time())}-"
-            f{_secrets.token_hex(3)}@{MAIL_DOMAIN}")
+            f"sb-manual-{int(time.time())}-{_secrets.token_hex(3)}"
+            f"@{MAIL_DOMAIN}")
         alpha = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
         password = "-Sb" + "".join(
             _secrets.choice(alpha) for _ in range(14)) + "!7"
