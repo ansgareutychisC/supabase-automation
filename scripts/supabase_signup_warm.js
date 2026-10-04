@@ -36,6 +36,7 @@ const args = Object.fromEntries(process.argv.slice(2).map((s, i, a) =>
 const OUT = args.out || '/tmp/supabase_warm_creds.json';
 const ATTEMPTS = parseInt(args.attempts || '3', 10);
 const TIER = args.tier || 'auto';
+let tier = TIER;   // mutable: escalates local -> zenrows on flow failure
 
 function freshEmail() {
   return `sb-warm-${Math.floor(Date.now() / 1000)}-${Math.random().toString(16).slice(2, 8)}@${MAIL_DOMAIN}`;
@@ -118,8 +119,6 @@ async function runAttempt(email, password) {
 async function main() {
   W.log('start', `tier=${TIER} attempts=${ATTEMPTS}`);
   let lastErr;
-  let tier = TIER;   // flow-level escalation: free tier first; a failed
-                     // attempt (CF challenge loop etc.) escalates to zenrows
   for (let a = 1; a <= ATTEMPTS; a++) {
     const email = typeof args.email === 'string' && a === 1 ? args.email : freshEmail();
     try {
