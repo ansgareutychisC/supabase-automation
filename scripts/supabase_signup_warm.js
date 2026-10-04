@@ -49,7 +49,7 @@ function genPassword() {
 }
 
 async function runAttempt(email, password) {
-  const { browser, ctx, tier } = await W.connect(tier, { country: args.country || 'us' });
+  const { browser, ctx, tier: usedTier } = await W.connect(tier, { country: args.country || 'us' });
   try {
     await W.wipeCookies(ctx);
     const page = await ctx.newPage();
@@ -108,7 +108,7 @@ async function runAttempt(email, password) {
 
     return {
       service: 'supabase', email, password, cookies,
-      signupIp: ip, proxyCountry: args.country || 'us', tier,
+      signupIp: ip, proxyCountry: args.country || 'us', tier: usedTier,
       createdAt: new Date().toISOString(),
     };
   } finally {
