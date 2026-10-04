@@ -50,6 +50,7 @@ function genPassword() {
 
 async function runAttempt(email, password) {
   const { browser, ctx, tier: usedTier } = await W.connect(tier, { country: args.country || 'us' });
+  const wd = W.startWatchdog(150000);
   try {
     await W.wipeCookies(ctx);
     const page = await ctx.newPage();
@@ -87,7 +88,7 @@ async function runAttempt(email, password) {
 
     const t0 = Date.now();
     while (signupStatus === null && Date.now() - t0 < 120000) {
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(3000); wd.touch();
       // hCaptcha invisible mode takes 2-10s; interactive mode would stall
       // until timeout (unsolvable headlessly)
     }
@@ -112,6 +113,7 @@ async function runAttempt(email, password) {
       createdAt: new Date().toISOString(),
     };
   } finally {
+    wd.stop();
     await browser.close().catch(() => {});
   }
 }
