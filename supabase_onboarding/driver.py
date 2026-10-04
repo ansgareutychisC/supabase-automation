@@ -95,6 +95,20 @@ class SupabaseDriver(ServiceDriver):
     def signup(self, opts: SignupOptions, on_event=_noop,
                cancel_fn=_never_cancel) -> dict:
         OnboardingAutomation, SignupClient, EmailWorkerClient = _ensure_pkg()
+
+        # OPERATOR-ASSIST MODE (2026-10-04 live finding): Supabase runs
+        # hCaptcha in ENTERPRISE/invisible mode — getcaptcha retried 6x on
+        # a Zenrows residential exit and never issued a token; there is no
+        # checkbox to click. Beyond tier-3 (Zenrows), so per doctrine this
+        # is a hard block for autonomous signup. The operator can solve ONE
+        # captcha in their own browser, copy the P1_... token from devtools
+        # (2-minute validity), and set SUPABASE_HCAPTCHA_TOKEN — then the
+        # whole signup runs as plain HTTP with no browser at all.
+        manual_token = os.environ.get("SUPABASE_HCAPTCHA_TOKEN", "").strip()
+        if manual_token:
+            return self._signup_with_manual_token(
+                opts, manual_token, SignupClient, EmailWorkerClient, on_event)
+
         out = os.path.join(config.DATA_DIR,
                            f"supabase_creds_{os.getpid()}_{int(time.time())}.json")
         tier = os.environ.get("SUPABASE_TIER", "auto")
@@ -165,6 +179,39 @@ class SupabaseDriver(ServiceDriver):
              ip=creds.get("signupIp"), country=creds.get("proxyCountry"),
              userId=result.user_id[:8] + "…",
              seconds=round(time.time() - t0, 1))
+        return creds
+
+    def _signup_with_manual_token(self, opts, token, SignupClient,
+                                  EmailWorkerClient, on_event) -> dict:
+        """Plain-HTTP signup with an operator-provided hCaptcha token."""
+        import secrets as _secrets
+        email = opts.email or (
+            f"sb-manual-{int(time.time())}-"
+            f{_secrets.token_hex(3)}@{MAIL_DOMAIN}")
+        alpha = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        password = "-Sb" + "".join(
+            _secrets.choice(alpha) for _ in range(14)) + "!7"
+        _evt(on_event, "signup_start", email=email, mode="manual-token")
+        t0 = time.time()
+        sc = SignupClient()
+        ew = EmailWorkerClient(base_url=MAIL_BASE, token=MAIL_TOKEN)
+        result = sc.signup_and_verify(
+            email, password, token, email_worker=ew, email_wait_timeout=300)
+        if not result.access_token:
+            raise RuntimeError("signup_and_verify returned no access_token")
+        creds = {
+            "service": self.name, "email": email, "password": password,
+            "userId": result.user_id,
+            "emailConfirmedAt": result.email_confirmed_at,
+            "accessToken": result.access_token,
+            "refreshToken": result.refresh_token,
+            "tokenV2": result.access_token,
+            "signupIp": None, "proxyCountry": opts.country,
+            "tier": "manual-token",
+            "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        _evt(on_event, "signup_done", email=email,
+             seconds=round(time.time() - t0, 1), mode="manual-token")
         return creds
 
     # ---------------------------------------------------- session files
