@@ -1,3 +1,5 @@
+# NOTE (git-as-disk policy, 2026-10-04): .env is deliberately TRACKED —
+# no persistent disk; github IS the disk (operator decision).
 # Python
 __pycache__/
 *.py[cod]
@@ -14,7 +16,6 @@ dist/
 build/
 
 # Env
-.env
 .env.local
 .venv/
 venv/
